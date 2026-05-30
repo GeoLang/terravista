@@ -1,0 +1,13 @@
+[package]
+name = "terravista-core"
+description = "Core mobile map SDK — offline tile cache, vector rendering, gestures, and GPS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
