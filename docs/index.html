@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TerraVista &mdash; Mobile Map SDK for TileTopia</title>
+    <meta name="description" content="Open-source mobile map SDK — offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing for iOS and Android.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0A0E17;
+            --bg-secondary: #0F1420;
+            --bg-tertiary: #151B2B;
+            --bg-card: #1A2035;
+            --bg-card-hover: #1F2845;
+            --border: #2A3555;
+            --border-hover: #3A4A70;
+            --accent: #10B981;
+            --accent-dim: rgba(16, 185, 129, 0.12);
+            --accent-glow: rgba(16, 185, 129, 0.25);
+            --blue: #38BDF8;
+            --cyan: #22D3EE;
+            --amber: #FBBF24;
+            --rose: #FB7185;
+            --purple: #A78BFA;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --text-tertiary: #64748B;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 1000;
+            background: rgba(10, 14, 23, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 2rem;
+        }
+
+        nav .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+        }
+
+        nav .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        nav .logo span {
+            color: var(--accent);
+        }
+
+        nav .links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        nav .links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        nav .links a:hover { color: var(--text-primary); }
+
+        /* Hero */
+        .hero {
+            padding: 10rem 2rem 6rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4.5rem);
+            font-weight: 900;
+            color: var(--text-primary);
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .hero h1 .highlight {
+            background: linear-gradient(135deg, var(--accent), var(--cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .subtitle {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto 2.5rem;
+            line-height: 1.8;
+        }
+
+        .hero .badges {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 3rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.9rem;
+            border-radius: 100px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+        }
+
+        .badge.green { color: var(--accent); border-color: rgba(16, 185, 129, 0.3); }
+        .badge.blue { color: var(--blue); border-color: rgba(56, 189, 248, 0.3); }
+        .badge.amber { color: var(--amber); border-color: rgba(251, 191, 36, 0.3); }
+
+        .cta-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.85rem 1.75rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #0A0E17;
+        }
+
+        .btn-primary:hover {
+            background: #34D399;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 25px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+        }
+
+        /* Sections */
+        section {
+            padding: 5rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+        }
+
+        .section-title {
+            font-size: 2.25rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+        }
+
+        .section-desc {
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 3rem;
+        }
+
+        /* Feature Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            transition: all 0.3s;
+        }
+
+        .feature-card:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+
+        .feature-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.25rem;
+            font-size: 1.5rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-card p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+
+        /* Architecture */
+        .arch-diagram {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.8;
+            overflow-x: auto;
+            color: var(--text-secondary);
+        }
+
+        .arch-diagram .layer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem 2rem;
+            margin: 0.5rem 0;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .arch-diagram .layer-platform {
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            color: var(--blue);
+        }
+
+        .arch-diagram .layer-ffi {
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            color: var(--amber);
+        }
+
+        .arch-diagram .layer-core {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent);
+        }
+
+        .arch-modules {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .arch-module {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .arch-module strong {
+            display: block;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        /* Code Block */
+        .code-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .code-section { grid-template-columns: 1fr; }
+        }
+
+        .code-block {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1.25rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .code-header span {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .code-lang {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: var(--bg-card);
+            color: var(--text-tertiary);
+        }
+
+        .code-block pre {
+            padding: 1.25rem;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.8;
+            color: var(--text-secondary);
+        }
+
+        .code-block .kw { color: var(--purple); }
+        .code-block .fn { color: var(--blue); }
+        .code-block .str { color: var(--accent); }
+        .code-block .num { color: var(--amber); }
+        .code-block .cm { color: var(--text-tertiary); }
+        .code-block .ty { color: var(--cyan); }
+
+        /* API Table */
+        .api-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 2rem;
+        }
+
+        .api-table th {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .api-table td {
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .api-table td:first-child {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--blue);
+        }
+
+        .api-table tr:hover td {
+            background: var(--bg-secondary);
+        }
+
+        /* Comparison */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .comparison-table th {
+            padding: 1rem 1.25rem;
+            text-align: left;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-tertiary);
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .comparison-table th:first-child { color: var(--text-primary); }
+
+        .comparison-table td {
+            padding: 0.85rem 1.25rem;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .comparison-table tr:last-child td { border-bottom: none; }
+
+        .check { color: var(--accent); font-weight: 700; }
+        .cross { color: var(--rose); }
+        .partial { color: var(--amber); }
+
+        /* Stats */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin: 3rem 0;
+        }
+
+        @media (max-width: 768px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        .stat {
+            text-align: center;
+            padding: 2rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Ecosystem */
+        .eco-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .eco-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .eco-card:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }
+
+        .eco-card h4 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .eco-card p {
+            font-size: 0.75rem;
+            color: var(--text-tertiary);
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 3rem 2rem;
+            text-align: center;
+            color: var(--text-tertiary);
+            font-size: 0.85rem;
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .arch-modules { grid-template-columns: repeat(2, 1fr); }
+            nav .links { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <a href="#" class="logo">🌍 Terra<span>Vista</span></a>
+            <ul class="links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#architecture">Architecture</a></li>
+                <li><a href="#api">API</a></li>
+                <li><a href="#integration">Integration</a></li>
+                <li><a href="#comparison">Comparison</a></li>
+                <li><a href="https://github.com/TileTopia-HQ/terravista">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <h1>
+            Mobile Maps,<br>
+            <span class="highlight">Open Source</span>
+        </h1>
+        <p class="subtitle">
+            Offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing — all from a single Rust library.
+        </p>
+        <div class="badges">
+            <span class="badge green">✓ Offline-First</span>
+            <span class="badge blue">⚡ GPU Accelerated</span>
+            <span class="badge amber">🦀 Pure Rust</span>
+        </div>
+        <div class="cta-group">
+            <a href="https://github.com/TileTopia-HQ/terravista" class="btn btn-primary">
+                View on GitHub →
+            </a>
+            <a href="#api" class="btn btn-secondary">
+                API Reference
+            </a>
+        </div>
+    </section>
+
+    <!-- Stats -->
+    <section>
+        <div class="stats-row">
+            <div class="stat">
+                <div class="stat-value">~2MB</div>
+                <div class="stat-label">Binary Size</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">25</div>
+                <div class="stat-label">Unit Tests</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">9</div>
+                <div class="stat-label">Core Modules</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">0</div>
+                <div class="stat-label">API Keys Required</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features">
+        <div class="section-label">Capabilities</div>
+        <h2 class="section-title">Everything for Mobile Maps</h2>
+        <p class="section-desc">A complete mobile mapping engine in a single library — no cloud dependencies, no API keys, no vendor lock-in.</p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">📦</div>
+                <h3>Offline Tile Cache</h3>
+                <p>LRU disk cache with configurable limits (256 MB default, 50K tiles). Pre-fetch entire regions for offline use. XYZ and MVT tile sources.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">👆</div>
+                <h3>Gesture Recognition</h3>
+                <p>Multi-touch state machine handling pan, pinch-zoom, rotate, and tilt. Platform-agnostic — feed it touch events, get camera deltas.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎨</div>
+                <h3>Style Engine</h3>
+                <p>Mapbox GL JSON-compatible styles with zoom-level interpolation. Fill, Line, Symbol, Circle, and Raster layer types.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🧭</div>
+                <h3>Turn-by-Turn Navigation</h3>
+                <p>On-device route tracking with step instructions, off-route detection (50m threshold), and arrival notification. No cloud required.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <h3>Offline Vector Editing</h3>
+                <p>Local feature store with create/update/delete and sync status tracking. BBox spatial queries and GeoJSON export.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🗺️</div>
+                <h3>Camera Model</h3>
+                <p>Continuous zoom (0–22), bearing, pitch. Web Mercator projection with viewport-aware tile range calculation.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📍</div>
+                <h3>Location Service</h3>
+                <p>GPS abstraction with tracking modes (Follow, Heading, Course). Haversine distance and bearing calculations built in.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🖼️</div>
+                <h3>Render Pipeline</h3>
+                <p>Frame-based command buffer for platform GPU backends. Metal (iOS) and Vulkan (Android) ready. HiDPI/Retina aware.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture -->
+    <section id="architecture">
+        <div class="section-label">Design</div>
+        <h2 class="section-title">Layered Architecture</h2>
+        <p class="section-desc">Clean separation between platform code, FFI boundary, and pure Rust core engine.</p>
+
+        <div class="arch-diagram">
+            <div class="layer layer-platform">Swift (iOS/macOS) &nbsp;│&nbsp; Kotlin (Android)</div>
+            <div class="layer layer-ffi">terravista-ffi — C ABI (staticlib + cdylib)</div>
+            <div class="layer layer-core">terravista-core — Pure Rust Engine</div>
+            <div class="arch-modules">
+                <div class="arch-module"><strong>Camera</strong>Viewport & Projection</div>
+                <div class="arch-module"><strong>Gesture</strong>Touch State Machine</div>
+                <div class="arch-module"><strong>Tile Cache</strong>LRU + Offline Regions</div>
+                <div class="arch-module"><strong>Offline Store</strong>Vector CRUD + Sync</div>
+                <div class="arch-module"><strong>Renderer</strong>Command Pipeline</div>
+                <div class="arch-module"><strong>Style</strong>Zoom Interpolation</div>
+                <div class="arch-module"><strong>Route</strong>Turn-by-Turn Nav</div>
+                <div class="arch-module"><strong>Location</strong>GPS Tracking</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- API Reference -->
+    <section id="api">
+        <div class="section-label">FFI</div>
+        <h2 class="section-title">C API Reference</h2>
+        <p class="section-desc">Flat C functions with <code>tv_</code> prefix. All opaque pointers freed with corresponding <code>_destroy</code>.</p>
+
+        <table class="api-table">
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>tv_map_create(w, h, dpr)</td><td>Create map state with viewport dimensions</td></tr>
+                <tr><td>tv_map_destroy(state)</td><td>Free map state</td></tr>
+                <tr><td>tv_map_set_center(state, lat, lon)</td><td>Set map center coordinate</td></tr>
+                <tr><td>tv_map_set_zoom(state, zoom)</td><td>Set zoom level (0.0–22.0)</td></tr>
+                <tr><td>tv_map_get_zoom(state)</td><td>Get current zoom level</td></tr>
+                <tr><td>tv_map_get_center_lat(state)</td><td>Get center latitude</td></tr>
+                <tr><td>tv_map_get_center_lon(state)</td><td>Get center longitude</td></tr>
+                <tr><td>tv_map_set_bearing(state, deg)</td><td>Set rotation (0–360°)</td></tr>
+                <tr><td>tv_map_set_pitch(state, deg)</td><td>Set tilt angle (0–60°)</td></tr>
+                <tr><td>tv_map_set_viewport(state, w, h, dpr)</td><td>Update viewport on resize/rotate</td></tr>
+                <tr><td>tv_map_pan(state, dx, dy)</td><td>Pan by pixel delta</td></tr>
+                <tr><td>tv_map_zoom_by(state, delta)</td><td>Zoom by delta (pinch/scroll)</td></tr>
+                <tr><td>tv_map_set_tile_url(state, url)</td><td>Set tile URL template ({z}/{x}/{y})</td></tr>
+                <tr><td>tv_cache_tile_count(state)</td><td>Get cached tile count</td></tr>
+                <tr><td>tv_cache_size_bytes(state)</td><td>Get cache size in bytes</td></tr>
+                <tr><td>tv_cache_clear(state)</td><td>Clear all cached tiles</td></tr>
+                <tr><td>tv_version()</td><td>Get SDK version string (must free)</td></tr>
+                <tr><td>tv_string_free(ptr)</td><td>Free SDK-allocated strings</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Integration Examples -->
+    <section id="integration">
+        <div class="section-label">Platforms</div>
+        <h2 class="section-title">Platform Integration</h2>
+        <p class="section-desc">Native Swift and Kotlin examples for iOS and Android.</p>
+
+        <div class="code-section">
+            <div class="code-block">
+                <div class="code-header">
+                    <span>iOS — Swift</span>
+                    <span class="code-lang">Swift</span>
+                </div>
+                <pre><span class="kw">import</span> TerraVista
+
+<span class="kw">class</span> <span class="ty">MapViewController</span>: <span class="ty">UIViewController</span> {
+    <span class="kw">private var</span> map: <span class="ty">OpaquePointer</span>?
+
+    <span class="kw">override func</span> <span class="fn">viewDidLoad</span>() {
+        <span class="kw">super</span>.<span class="fn">viewDidLoad</span>()
+        <span class="kw">let</span> b = view.bounds
+        <span class="kw">let</span> s = <span class="ty">Float</span>(<span class="ty">UIScreen</span>.main.scale)
+        map = <span class="fn">tv_map_create</span>(<span class="ty">UInt32</span>(b.width),
+                           <span class="ty">UInt32</span>(b.height), s)
+        <span class="fn">tv_map_set_center</span>(map, <span class="num">51.5074</span>, <span class="num">-0.1278</span>)
+        <span class="fn">tv_map_set_zoom</span>(map, <span class="num">14.0</span>)
+        <span class="fn">tv_map_set_tile_url</span>(map,
+            <span class="str">"https://tiles.tiletopia.dev/{z}/{x}/{y}.mvt"</span>)
+    }
+
+    <span class="kw">deinit</span> { <span class="fn">tv_map_destroy</span>(map) }
+}</pre>
+            </div>
+            <div class="code-block">
+                <div class="code-header">
+                    <span>Android — Kotlin</span>
+                    <span class="code-lang">Kotlin</span>
+                </div>
+                <pre><span class="kw">class</span> <span class="ty">MapView</span>(ctx: <span class="ty">Context</span>) : <span class="ty">View</span>(ctx) {
+    <span class="kw">private var</span> map: <span class="ty">Long</span> = <span class="num">0</span>
+
+    <span class="kw">init</span> {
+        <span class="ty">System</span>.<span class="fn">loadLibrary</span>(<span class="str">"terravista_ffi"</span>)
+        map = <span class="fn">tvMapCreate</span>(
+            width.toUInt(),
+            height.toUInt(),
+            resources.displayMetrics.density)
+        <span class="fn">tvMapSetCenter</span>(map, <span class="num">51.5074</span>, <span class="num">-0.1278</span>)
+        <span class="fn">tvMapSetZoom</span>(map, <span class="num">14.0</span>)
+        <span class="fn">tvMapSetTileUrl</span>(map,
+            <span class="str">"https://tiles.tiletopia.dev/{z}/{x}/{y}.mvt"</span>)
+    }
+
+    <span class="kw">fun</span> <span class="fn">destroy</span>() { <span class="fn">tvMapDestroy</span>(map) }
+
+    <span class="cm">// JNI bindings auto-generated from C header</span>
+    <span class="kw">private external fun</span> <span class="fn">tvMapCreate</span>(...): <span class="ty">Long</span>
+    <span class="kw">private external fun</span> <span class="fn">tvMapDestroy</span>(s: <span class="ty">Long</span>)
+}</pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison -->
+    <section id="comparison">
+        <div class="section-label">Why TerraVista</div>
+        <h2 class="section-title">SDK Comparison</h2>
+        <p class="section-desc">How TerraVista stacks up against proprietary mobile map SDKs.</p>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>TerraVista</th>
+                    <th>Mapbox SDK</th>
+                    <th>Google Maps SDK</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Open Source</td>
+                    <td class="check">✓ AGPL-3.0</td>
+                    <td class="partial">Partial</td>
+                    <td class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td>Offline-First</td>
+                    <td class="check">✓ Built-in</td>
+                    <td>Add-on</td>
+                    <td>Limited</td>
+                </tr>
+                <tr>
+                    <td>Custom Tile Sources</td>
+                    <td class="check">✓ Any XYZ/MVT</td>
+                    <td class="cross">Mapbox only</td>
+                    <td class="cross">Google only</td>
+                </tr>
+                <tr>
+                    <td>Binary Size</td>
+                    <td class="check">~2 MB</td>
+                    <td>~30 MB</td>
+                    <td>~20 MB</td>
+                </tr>
+                <tr>
+                    <td>API Key Required</td>
+                    <td class="check">✓ None</td>
+                    <td class="cross">Required</td>
+                    <td class="cross">Required</td>
+                </tr>
+                <tr>
+                    <td>Self-Hosted Tiles</td>
+                    <td class="check">✓ Full support</td>
+                    <td class="cross">✗</td>
+                    <td class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td>On-Device Navigation</td>
+                    <td class="check">✓ Built-in</td>
+                    <td>Cloud-dependent</td>
+                    <td>Cloud-dependent</td>
+                </tr>
+                <tr>
+                    <td>Offline Vector Editing</td>
+                    <td class="check">✓ With sync</td>
+                    <td class="cross">✗</td>
+                    <td class="cross">✗</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Ecosystem -->
+    <section>
+        <div class="section-label">Ecosystem</div>
+        <h2 class="section-title">Part of TileTopia</h2>
+        <p class="section-desc">TerraVista integrates with the full TileTopia geospatial platform.</p>
+
+        <div class="eco-grid">
+            <a href="https://github.com/TileTopia-HQ/tiletopia" class="eco-card">
+                <h4>TileTopia</h4>
+                <p>Vector tile server</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/viewtopia" class="eco-card">
+                <h4>ViewTopia</h4>
+                <p>Web map viewer</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/itinera" class="eco-card">
+                <h4>Itinera</h4>
+                <p>Routing engine</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/geokode" class="eco-card">
+                <h4>GeoKode</h4>
+                <p>Geocoding service</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/terrano" class="eco-card">
+                <h4>Terrano</h4>
+                <p>Terrain/elevation</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/ptolemy" class="eco-card">
+                <h4>Ptolemy</h4>
+                <p>Cartographic styling</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/jung" class="eco-card">
+                <h4>Jung</h4>
+                <p>GPU rendering engine</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/geodukt" class="eco-card">
+                <h4>GeoDukt</h4>
+                <p>Data pipeline/ETL</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/geogit" class="eco-card">
+                <h4>GeoGit</h4>
+                <p>Versioned geodata</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/fluvius" class="eco-card">
+                <h4>Fluvius</h4>
+                <p>Real-time streaming</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/panoptes" class="eco-card">
+                <h4>Panoptes</h4>
+                <p>Monitoring</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/fenestra" class="eco-card">
+                <h4>Fenestra</h4>
+                <p>WMS/WMTS server</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/projicio" class="eco-card">
+                <h4>Projicio</h4>
+                <p>CRS/projections</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/topoi" class="eco-card">
+                <h4>Topoi</h4>
+                <p>Topology engine</p>
+            </a>
+            <a href="https://github.com/TileTopia-HQ/nubis" class="eco-card">
+                <h4>Nubis</h4>
+                <p>Cloud infrastructure</p>
+            </a>
+        </div>
+    </section>
+
+    <!-- Getting Started -->
+    <section>
+        <div class="section-label">Quick Start</div>
+        <h2 class="section-title">Get Started in Minutes</h2>
+        <p class="section-desc">Clone, build, and integrate into your mobile app.</p>
+
+        <div class="code-block" style="max-width: 700px;">
+            <div class="code-header">
+                <span>Terminal</span>
+                <span class="code-lang">bash</span>
+            </div>
+            <pre><span class="cm"># Clone</span>
+git clone git@github.com:TileTopia-HQ/terravista.git
+<span class="kw">cd</span> terravista
+
+<span class="cm"># Build & test</span>
+cargo build
+cargo test
+
+<span class="cm"># Build for iOS</span>
+rustup target add aarch64-apple-ios
+cargo build --target aarch64-apple-ios -p terravista-ffi --release
+
+<span class="cm"># Build for Android</span>
+rustup target add aarch64-linux-android
+cargo build --target aarch64-linux-android -p terravista-ffi --release</pre>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <p>
+            TerraVista is part of <a href="https://github.com/TileTopia-HQ">TileTopia</a> — open-source geospatial infrastructure.
+        </p>
+        <p style="margin-top: 0.5rem; color: var(--text-tertiary);">
+            Licensed under AGPL-3.0-or-later &nbsp;·&nbsp; Copyright © 2024 TileTopia
+        </p>
+    </footer>
+</body>
+</html>
