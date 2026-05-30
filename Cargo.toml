@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/GeoLang/terravista"
-authors = ["TileTopia <tiletopia@proton.me>"]
+authors = ["GeoLang <tiletopia@proton.me>"]
 description = "Mobile map SDK — offline tiles, vector rendering, and navigation for iOS/Android"
 rust-version = "1.85"
 
