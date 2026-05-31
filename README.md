@@ -1,5 +1,7 @@
 # TerraVista
 
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
+
 **Mobile map SDK for the GeoLang ecosystem** — offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing for iOS and Android.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
@@ -142,15 +144,23 @@ TerraVista is a cross-platform mobile mapping engine written in Rust, designed t
 
 ```bash
 # Build all crates
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build
 
 # Run tests (25 unit tests)
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo test
 
 # Lint
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo clippy --all-targets -- -D warnings
 
 # Format
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo fmt --all
 ```
 
@@ -161,6 +171,8 @@ rustup target add aarch64-apple-ios
 cargo build --target aarch64-apple-ios -p terravista-ffi --release
 
 # Output: target/aarch64-apple-ios/release/libterravista_ffi.a
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 ```
 
 ### Android (Shared Library)
@@ -168,19 +180,27 @@ cargo build --target aarch64-apple-ios -p terravista-ffi --release
 ```bash
 rustup target add aarch64-linux-android
 # Requires ANDROID_NDK_HOME set and a cargo config for the linker
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-linux-android -p terravista-ffi --release
 
 # Output: target/aarch64-linux-android/release/libterravista_ffi.so
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 ```
 
 ### All Mobile Targets
 
 ```bash
 # iOS (arm64 + simulator)
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-apple-ios -p terravista-ffi --release
 cargo build --target aarch64-apple-ios-sim -p terravista-ffi --release
 
 # Android (arm64, armv7, x86_64)
+
+[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-linux-android -p terravista-ffi --release
 cargo build --target armv7-linux-androideabi -p terravista-ffi --release
 cargo build --target x86_64-linux-android -p terravista-ffi --release
