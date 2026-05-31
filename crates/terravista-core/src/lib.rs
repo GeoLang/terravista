@@ -32,6 +32,7 @@ pub mod renderer;
 pub mod route;
 pub mod style;
 pub mod tile_cache;
+pub mod tile_package;
 
 pub use camera::{Camera, Viewport};
 pub use error::Error;

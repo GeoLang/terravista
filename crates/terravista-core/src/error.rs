@@ -13,6 +13,9 @@ pub enum Error {
     #[error("invalid coordinate: lat={lat}, lon={lon}")]
     InvalidCoordinate { lat: f64, lon: f64 },
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("offline database error: {0}")]
     OfflineDb(String),
 
