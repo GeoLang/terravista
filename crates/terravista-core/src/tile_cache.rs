@@ -33,7 +33,7 @@ pub struct CacheConfig {
     pub max_size_bytes: u64,
     /// Maximum number of tiles (default: 50_000).
     pub max_tiles: u32,
-    /// Tile source URL template (e.g., "https://tiles.example.com/{z}/{x}/{y}.mvt").
+    /// Tile source URL template (e.g., "`https://tiles.example.com/`{z}/{x}/{y}.mvt").
     pub url_template: String,
 }
 

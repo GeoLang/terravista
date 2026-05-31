@@ -171,7 +171,7 @@ pub unsafe extern "C" fn tv_map_zoom_by(state: *mut TvMapState, delta: f64) {
 
 // ─── Tile Cache ──────────────────────────────────────────────────────────────
 
-/// Set the tile URL template (e.g., "https://tiles.example.com/{z}/{x}/{y}.mvt").
+/// Set the tile URL template (e.g., "`https://tiles.example.com/`{z}/{x}/{y}.mvt").
 ///
 /// # Safety
 /// `state` and `url` must be valid pointers.
