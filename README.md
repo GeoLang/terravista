@@ -379,6 +379,6 @@ class MapView(context: Context) : View(context) {
 
 ## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) or later.
+AGPL-3.0-or-later, see [LICENSE](LICENSE).
 
-Copyright © 2024 GeoLang
+Copyright (C) 2026 Grok Image Compression Inc.
