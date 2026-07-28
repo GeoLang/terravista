@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 
-**Mobile map SDK for the GeoLang ecosystem** — offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing for iOS and Android.
+**Mobile map SDK core for the GeoLang ecosystem**: camera and viewport math, gesture recognition, tile caching, offline feature storage, and on-device turn-by-turn navigation, exposed to iOS and Android over a flat C FFI.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
@@ -13,19 +13,35 @@
 
 ## Overview
 
-TerraVista is a cross-platform mobile mapping engine written in Rust, designed to be consumed from Swift (iOS) and Kotlin (Android) via a flat C FFI. It provides everything needed to build a native mobile map experience without depending on proprietary SDKs like Mapbox or Google Maps.
+TerraVista is a cross-platform mobile mapping core written in Rust, designed to be consumed from Swift (iOS) and Kotlin (Android) via a flat C FFI. It holds map state and does the map math. It does not talk to the network and it does not touch the GPU.
 
-### Why TerraVista?
+### Status
 
-| Feature | TerraVista | Mapbox SDK | Google Maps SDK |
-|---------|-----------|------------|-----------------|
-| Open source | ✅ AGPL-3.0 | Partial | ❌ |
-| Offline-first | ✅ Built-in | Add-on | Limited |
-| Custom tile sources | ✅ Any XYZ/MVT | Mapbox only | Google only |
-| Binary size | ~2 MB | ~30 MB | ~20 MB |
-| No API key required | ✅ | ❌ | ❌ |
-| Self-hosted tiles | ✅ | ❌ | ❌ |
-| Turn-by-turn nav | ✅ On-device | Cloud-dependent | Cloud-dependent |
+This is v0.1. TerraVista is not yet a drop-in replacement for Mapbox or Google Maps: it
+cannot fetch or draw a tile on its own.
+
+**What works today**
+
+- Camera and viewport: Web Mercator projection, zoom, bearing, pitch, visible bounds, tile range
+- Gesture recognition: pan, pinch-zoom, rotate, tilt state machine
+- Tile cache: in-memory LRU keyed by tile coordinate, with XYZ URL template building
+- Offline vector store: in-memory feature CRUD with sync status tracking
+- Style engine: parses Mapbox GL style JSON and interpolates properties by zoom
+- Turn-by-turn navigation over a pre-computed route
+- Location model: coordinates, Haversine distance, bearing, tracking modes
+- Render command buffer: describes what to draw, in screen coordinates
+- Tile package format: a custom TVPK binary archive
+- C FFI covering map lifecycle, camera, gestures, and cache
+
+**What the host app must supply**
+
+- **HTTP tile fetching.** TerraVista builds tile URLs, it does not request them. There is no HTTP client in the dependency tree.
+- **MVT decoding.** Nothing decodes Mapbox Vector Tiles. The cache stores opaque bytes and the renderer expects features you have already decoded.
+- **GPU rendering.** The renderer emits `RenderCommand` objects. Executing them against Metal or Vulkan is the platform layer's job. No shaders ship here.
+- **Routing.** The navigator tracks progress along a route you computed elsewhere, for example with [Itinera](https://github.com/GeoLang/itinera).
+- **GPS.** `LocationProvider` is a trait for the platform to implement.
+
+HTTP fetching and MVT decoding are targeted for v0.2, the rendering backends for v0.3. See the [Roadmap](#roadmap).
 
 ---
 
@@ -80,9 +96,9 @@ TerraVista is a cross-platform mobile mapping engine written in Rust, designed t
 
 ### 📦 Offline Tile Cache
 
-- LRU eviction with configurable max size (default 256 MB) and tile count (50,000)
-- Per-region pre-fetch for offline areas
-- URL template system (`{z}/{x}/{y}` substitution)
+- In-memory LRU eviction with configurable max size (default 256 MB) and tile count (50,000)
+- `missing_tiles` computes what a region still needs, so the host can pre-fetch it
+- URL template system (`{z}/{x}/{y}` substitution), building only, the host does the request
 - Tile metadata tracking (format, size, timestamps)
 
 ### 🔄 Offline Vector Store
@@ -120,15 +136,16 @@ TerraVista is a cross-platform mobile mapping engine written in Rust, designed t
 - Frame-based command buffer: Clear, DrawRasterTile, DrawVectorLayer, DrawLocationMarker, DrawRoute
 - Visible tile calculation with screen-space placement
 - Device pixel ratio awareness for Retina/HiDPI displays
-- Platform GPU backend integration point (Metal on iOS, Vulkan on Android)
+- Describes the frame, it does not draw it. The platform layer executes the commands against Metal (iOS) or Vulkan (Android). Those backends are v0.3.
 
 ### 📦 Offline Tile Packages
 
-- MBTiles-format tile packages for fully disconnected use
+- Custom TVPK binary archive format for fully disconnected use, not MBTiles or SQLite
 - `PackageDefinition` with bounding box, zoom range, tile source URL
 - Tile count estimation before download
-- Binary TVPK format with custom header for fast archive access
+- Serialize and deserialize a package, with a magic-byte header and bbox validation
 - Region-based tile enumeration across zoom levels
+- Held in memory, and populated by the host since there is no downloader here
 
 ---
 
@@ -144,23 +161,15 @@ TerraVista is a cross-platform mobile mapping engine written in Rust, designed t
 
 ```bash
 # Build all crates
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build
 
-# Run tests (25 unit tests)
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
+# Run tests (58 tests: 35 unit, 23 integration)
 cargo test
 
 # Lint
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo clippy --all-targets -- -D warnings
 
 # Format
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo fmt --all
 ```
 
@@ -171,8 +180,6 @@ rustup target add aarch64-apple-ios
 cargo build --target aarch64-apple-ios -p terravista-ffi --release
 
 # Output: target/aarch64-apple-ios/release/libterravista_ffi.a
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 ```
 
 ### Android (Shared Library)
@@ -180,27 +187,19 @@ cargo build --target aarch64-apple-ios -p terravista-ffi --release
 ```bash
 rustup target add aarch64-linux-android
 # Requires ANDROID_NDK_HOME set and a cargo config for the linker
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-linux-android -p terravista-ffi --release
 
 # Output: target/aarch64-linux-android/release/libterravista_ffi.so
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 ```
 
 ### All Mobile Targets
 
 ```bash
 # iOS (arm64 + simulator)
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-apple-ios -p terravista-ffi --release
 cargo build --target aarch64-apple-ios-sim -p terravista-ffi --release
 
 # Android (arm64, armv7, x86_64)
-
-[![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 cargo build --target aarch64-linux-android -p terravista-ffi --release
 cargo build --target armv7-linux-androideabi -p terravista-ffi --release
 cargo build --target x86_64-linux-android -p terravista-ffi --release
@@ -211,6 +210,8 @@ cargo build --target x86_64-linux-android -p terravista-ffi --release
 ## FFI API Reference
 
 All functions use the `tv_` prefix and follow C naming conventions. Opaque pointers must be freed with their corresponding `_destroy` function.
+
+The FFI covers map state and camera math. There is no `tv_` call that fetches or draws a tile, because neither exists yet.
 
 ### Map Lifecycle
 
@@ -262,6 +263,9 @@ void tv_string_free(char* ptr); // Free SDK-allocated strings
 ---
 
 ## Platform Integration
+
+These examples wire up camera and gestures, which is everything the SDK does today.
+Fetching the tiles at the configured URL and drawing them is still the app's job.
 
 ### Swift (iOS)
 
@@ -359,21 +363,21 @@ class MapView(context: Context) : View(context) {
 
 | Project | Description |
 |---------|-------------|
-| [GeoLang](https://github.com/GeoLang/tiletopia) | Vector tile server |
+| [TileTopia](https://github.com/GeoLang/tiletopia) | 3D Tiles server |
 | [ViewTopia](https://github.com/GeoLang/viewtopia) | Web map viewer |
 | [Itinera](https://github.com/GeoLang/itinera) | Routing engine |
 | [GeoKode](https://github.com/GeoLang/geokode) | Geocoding service |
-| [Nubis](https://github.com/GeoLang/nubis) | Cloud infrastructure |
-| [Terrano](https://github.com/GeoLang/terrano) | Terrain/elevation service |
-| [Ptolemy](https://github.com/GeoLang/ptolemy) | Cartographic styling |
+| [Nubis](https://github.com/GeoLang/nubis) | Point cloud processing |
+| [Terrano](https://github.com/GeoLang/terrano) | Raster algebra and terrain analysis |
+| [Ptolemy](https://github.com/GeoLang/ptolemy) | Versioned geodatabase platform |
 | [GeoDukt](https://github.com/GeoLang/geodukt) | Data pipeline/ETL |
 | [GeoGit](https://github.com/GeoLang/geogit) | Versioned geodata |
-| [Jung](https://github.com/GeoLang/jung) | GPU rendering engine |
+| [Jung](https://github.com/GeoLang/jung) | Symbology and cartographic rendering |
 | [Fluvius](https://github.com/GeoLang/fluvius) | Real-time streaming |
-| [Panoptes](https://github.com/GeoLang/panoptes) | Monitoring/observability |
+| [Panoptes](https://github.com/GeoLang/panoptes) | AI feature extraction from imagery |
 | [Projicio](https://github.com/GeoLang/projicio) | CRS/projection library |
-| [Topoi](https://github.com/GeoLang/topoi) | Topology engine |
-| [Fenestra](https://github.com/GeoLang/fenestra) | WMS/WMTS server |
+| [Topoi](https://github.com/GeoLang/topoi) | Computational geometry |
+| [Fenestra](https://github.com/GeoLang/fenestra) | OGC services gateway |
 
 ---
 

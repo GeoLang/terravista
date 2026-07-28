@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TerraVista &mdash; Mobile Map SDK for GeoLang</title>
-    <meta name="description" content="Open-source mobile map SDK — offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing for iOS and Android.">
+    <meta name="description" content="Open-source mobile map SDK core: camera and viewport math, gesture recognition, tile caching, and on-device turn-by-turn navigation for iOS and Android. Tile fetching and rendering are the host app's job.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -563,7 +563,7 @@
                 <li><a href="#architecture">Architecture</a></li>
                 <li><a href="#api">API</a></li>
                 <li><a href="#integration">Integration</a></li>
-                <li><a href="#comparison">Comparison</a></li>
+                <li><a href="#status">Status</a></li>
                 <li><a href="https://github.com/GeoLang/terravista">GitHub</a></li>
             </ul>
         </div>
@@ -576,11 +576,11 @@
             <span class="highlight">Open Source</span>
         </h1>
         <p class="subtitle">
-            Offline-first tile caching, GPU-accelerated vector rendering, gesture-driven navigation, and turn-by-turn routing — all from a single Rust library.
+            Camera and viewport math, gesture recognition, tile caching, and turn-by-turn navigation, from a single Rust library behind a flat C FFI. It holds the map state and does the map math. Fetching tiles and drawing them stays in your app.
         </p>
         <div class="badges">
             <span class="badge green">✓ Offline-First</span>
-            <span class="badge blue">⚡ GPU Accelerated</span>
+            <span class="badge blue">📐 Map Math Core</span>
             <span class="badge amber">🦀 Pure Rust</span>
         </div>
         <div class="cta-group">
@@ -597,12 +597,12 @@
     <section>
         <div class="stats-row">
             <div class="stat">
-                <div class="stat-value">~2MB</div>
-                <div class="stat-label">Binary Size</div>
+                <div class="stat-value">3</div>
+                <div class="stat-label">Runtime Dependencies</div>
             </div>
             <div class="stat">
-                <div class="stat-value">25</div>
-                <div class="stat-label">Unit Tests</div>
+                <div class="stat-value">58</div>
+                <div class="stat-label">Tests</div>
             </div>
             <div class="stat">
                 <div class="stat-value">9</div>
@@ -618,14 +618,14 @@
     <!-- Features -->
     <section id="features">
         <div class="section-label">Capabilities</div>
-        <h2 class="section-title">Everything for Mobile Maps</h2>
-        <p class="section-desc">A complete mobile mapping engine in a single library — no cloud dependencies, no API keys, no vendor lock-in.</p>
+        <h2 class="section-title">The Map Engine Core</h2>
+        <p class="section-desc">The state and the math a mobile map needs, with no cloud dependencies, no API keys, and no vendor lock-in. Networking and drawing are deliberately left to the platform layer.</p>
 
         <div class="features-grid">
             <div class="feature-card">
                 <div class="feature-icon">📦</div>
                 <h3>Offline Tile Cache</h3>
-                <p>LRU disk cache with configurable limits (256 MB default, 50K tiles). Pre-fetch entire regions for offline use. XYZ and MVT tile sources.</p>
+                <p>In-memory LRU cache with configurable limits (256 MB default, 50K tiles). Builds XYZ URL templates and reports which tiles a region is missing, so your app can pre-fetch them.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">👆</div>
@@ -660,7 +660,7 @@
             <div class="feature-card">
                 <div class="feature-icon">🖼️</div>
                 <h3>Render Pipeline</h3>
-                <p>Frame-based command buffer for platform GPU backends. Metal (iOS) and Vulkan (Android) ready. HiDPI/Retina aware.</p>
+                <p>Frame-based command buffer describing what to draw, in screen coordinates. HiDPI/Retina aware. Your platform layer executes the commands. Metal and Vulkan backends are v0.3.</p>
             </div>
         </div>
     </section>
@@ -728,7 +728,7 @@
     <section id="integration">
         <div class="section-label">Platforms</div>
         <h2 class="section-title">Platform Integration</h2>
-        <p class="section-desc">Native Swift and Kotlin examples for iOS and Android.</p>
+        <p class="section-desc">Native Swift and Kotlin examples for iOS and Android. These wire up camera and gestures, which is what the SDK does today. Requesting the tiles at that URL and drawing them is still your app's job.</p>
 
         <div class="code-section">
             <div class="code-block">
@@ -787,68 +787,79 @@
     </section>
 
     <!-- Comparison -->
-    <section id="comparison">
-        <div class="section-label">Why TerraVista</div>
-        <h2 class="section-title">SDK Comparison</h2>
-        <p class="section-desc">How TerraVista stacks up against proprietary mobile map SDKs.</p>
+    <section id="status">
+        <div class="section-label">Status</div>
+        <h2 class="section-title">What Works in v0.1</h2>
+        <p class="section-desc">TerraVista is a map engine core, not yet a drop-in Mapbox or Google Maps replacement. It cannot fetch or draw a tile on its own. Here is the honest split.</p>
 
         <table class="comparison-table">
             <thead>
                 <tr>
-                    <th>Feature</th>
-                    <th>TerraVista</th>
-                    <th>Mapbox SDK</th>
-                    <th>Google Maps SDK</th>
+                    <th>Capability</th>
+                    <th>Status</th>
+                    <th>Notes</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>Open Source</td>
-                    <td class="check">✓ AGPL-3.0</td>
-                    <td class="partial">Partial</td>
-                    <td class="cross">✗</td>
+                    <td>Camera, viewport, tile math</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Web Mercator, zoom, bearing, pitch, visible tile range</td>
                 </tr>
                 <tr>
-                    <td>Offline-First</td>
-                    <td class="check">✓ Built-in</td>
-                    <td>Add-on</td>
-                    <td>Limited</td>
+                    <td>Gesture recognition</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Pan, pinch-zoom, rotate, tilt state machine</td>
                 </tr>
                 <tr>
-                    <td>Custom Tile Sources</td>
-                    <td class="check">✓ Any XYZ/MVT</td>
-                    <td class="cross">Mapbox only</td>
-                    <td class="cross">Google only</td>
+                    <td>Tile cache</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>In-memory LRU, URL template building, missing-tile queries</td>
                 </tr>
                 <tr>
-                    <td>Binary Size</td>
-                    <td class="check">~2 MB</td>
-                    <td>~30 MB</td>
-                    <td>~20 MB</td>
+                    <td>Offline vector store</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>In-memory feature CRUD with sync status and GeoJSON export</td>
                 </tr>
                 <tr>
-                    <td>API Key Required</td>
-                    <td class="check">✓ None</td>
-                    <td class="cross">Required</td>
-                    <td class="cross">Required</td>
+                    <td>Style parsing</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Mapbox GL style JSON, zoom-interpolated properties</td>
                 </tr>
                 <tr>
-                    <td>Self-Hosted Tiles</td>
-                    <td class="check">✓ Full support</td>
-                    <td class="cross">✗</td>
-                    <td class="cross">✗</td>
+                    <td>Turn-by-turn navigation</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Tracks progress along a route computed elsewhere</td>
                 </tr>
                 <tr>
-                    <td>On-Device Navigation</td>
-                    <td class="check">✓ Built-in</td>
-                    <td>Cloud-dependent</td>
-                    <td>Cloud-dependent</td>
+                    <td>C FFI</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Map lifecycle, camera, gestures, cache</td>
                 </tr>
                 <tr>
-                    <td>Offline Vector Editing</td>
-                    <td class="check">✓ With sync</td>
-                    <td class="cross">✗</td>
-                    <td class="cross">✗</td>
+                    <td>HTTP tile fetching</td>
+                    <td class="cross">Roadmap v0.2</td>
+                    <td>No HTTP client in the dependency tree. Your app requests the URLs.</td>
+                </tr>
+                <tr>
+                    <td>MVT decoding</td>
+                    <td class="cross">Roadmap v0.2</td>
+                    <td>The cache stores opaque bytes. Decode before handing features to the renderer.</td>
+                </tr>
+                <tr>
+                    <td>Metal rendering (iOS)</td>
+                    <td class="cross">Roadmap v0.3</td>
+                    <td>The renderer emits draw commands, it does not execute them</td>
+                </tr>
+                <tr>
+                    <td>Vulkan rendering (Android)</td>
+                    <td class="cross">Roadmap v0.3</td>
+                    <td>Same, the platform layer owns the GPU</td>
+                </tr>
+                <tr>
+                    <td>Route computation</td>
+                    <td class="cross">Out of scope</td>
+                    <td>Use <a href="https://github.com/GeoLang/itinera">Itinera</a> or another routing engine</td>
                 </tr>
             </tbody>
         </table>
@@ -862,8 +873,8 @@
 
         <div class="eco-grid">
             <a href="https://github.com/GeoLang/tiletopia" class="eco-card">
-                <h4>GeoLang</h4>
-                <p>Vector tile server</p>
+                <h4>TileTopia</h4>
+                <p>3D Tiles server</p>
             </a>
             <a href="https://github.com/GeoLang/viewtopia" class="eco-card">
                 <h4>ViewTopia</h4>
@@ -879,15 +890,15 @@
             </a>
             <a href="https://github.com/GeoLang/terrano" class="eco-card">
                 <h4>Terrano</h4>
-                <p>Terrain/elevation</p>
+                <p>Raster algebra and terrain</p>
             </a>
             <a href="https://github.com/GeoLang/ptolemy" class="eco-card">
                 <h4>Ptolemy</h4>
-                <p>Cartographic styling</p>
+                <p>Versioned geodatabase</p>
             </a>
             <a href="https://github.com/GeoLang/jung" class="eco-card">
                 <h4>Jung</h4>
-                <p>GPU rendering engine</p>
+                <p>Symbology and cartographic rendering</p>
             </a>
             <a href="https://github.com/GeoLang/geodukt" class="eco-card">
                 <h4>GeoDukt</h4>
@@ -903,11 +914,11 @@
             </a>
             <a href="https://github.com/GeoLang/panoptes" class="eco-card">
                 <h4>Panoptes</h4>
-                <p>Monitoring</p>
+                <p>AI feature extraction</p>
             </a>
             <a href="https://github.com/GeoLang/fenestra" class="eco-card">
                 <h4>Fenestra</h4>
-                <p>WMS/WMTS server</p>
+                <p>OGC services gateway</p>
             </a>
             <a href="https://github.com/GeoLang/projicio" class="eco-card">
                 <h4>Projicio</h4>
@@ -915,11 +926,11 @@
             </a>
             <a href="https://github.com/GeoLang/topoi" class="eco-card">
                 <h4>Topoi</h4>
-                <p>Topology engine</p>
+                <p>Computational geometry</p>
             </a>
             <a href="https://github.com/GeoLang/nubis" class="eco-card">
                 <h4>Nubis</h4>
-                <p>Cloud infrastructure</p>
+                <p>Point cloud processing</p>
             </a>
         </div>
     </section>
