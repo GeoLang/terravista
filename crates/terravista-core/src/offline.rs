@@ -29,6 +29,35 @@ pub enum OfflineGeometry {
     Polygon(Vec<Vec<Coordinate>>),
 }
 
+/// Bounding envelope of a geometry as (min_lat, max_lat, min_lon, max_lon).
+///
+/// Returns `None` for a geometry with no coordinates at all.
+fn envelope(geometry: &OfflineGeometry) -> Option<(f64, f64, f64, f64)> {
+    let rings: &[Vec<Coordinate>] = match geometry {
+        OfflineGeometry::Point(c) => {
+            return Some((c.latitude, c.latitude, c.longitude, c.longitude));
+        }
+        OfflineGeometry::LineString(coords) => std::slice::from_ref(coords),
+        OfflineGeometry::Polygon(rings) => rings,
+    };
+
+    let mut coords = rings.iter().flatten();
+    let first = coords.next()?;
+    let mut env = (
+        first.latitude,
+        first.latitude,
+        first.longitude,
+        first.longitude,
+    );
+    for c in coords {
+        env.0 = env.0.min(c.latitude);
+        env.1 = env.1.max(c.latitude);
+        env.2 = env.2.min(c.longitude);
+        env.3 = env.3.max(c.longitude);
+    }
+    Some(env)
+}
+
 /// Sync status of a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncStatus {
@@ -111,38 +140,32 @@ impl OfflineStore {
                 if f.sync_status == SyncStatus::PendingDelete {
                     return false;
                 }
-                match &f.geometry {
-                    OfflineGeometry::Point(c) => {
-                        c.latitude >= min_lat
-                            && c.latitude <= max_lat
-                            && c.longitude >= min_lon
-                            && c.longitude <= max_lon
+                // envelope overlap, so a shape crossing the box still matches
+                // even when none of its vertices land inside it
+                match envelope(&f.geometry) {
+                    Some((f_min_lat, f_max_lat, f_min_lon, f_max_lon)) => {
+                        f_min_lat <= max_lat
+                            && f_max_lat >= min_lat
+                            && f_min_lon <= max_lon
+                            && f_max_lon >= min_lon
                     }
-                    OfflineGeometry::LineString(coords) => coords.iter().any(|c| {
-                        c.latitude >= min_lat
-                            && c.latitude <= max_lat
-                            && c.longitude >= min_lon
-                            && c.longitude <= max_lon
-                    }),
-                    OfflineGeometry::Polygon(rings) => rings.iter().flatten().any(|c| {
-                        c.latitude >= min_lat
-                            && c.latitude <= max_lat
-                            && c.longitude >= min_lon
-                            && c.longitude <= max_lon
-                    }),
+                    None => false,
                 }
             })
             .collect()
     }
 
-    /// Number of features in the store.
+    /// Number of live features, excluding ones pending deletion.
     pub fn len(&self) -> usize {
-        self.features.len()
+        self.features
+            .values()
+            .filter(|f| f.sync_status != SyncStatus::PendingDelete)
+            .count()
     }
 
-    /// Whether the store is empty.
+    /// Whether the store holds no live features.
     pub fn is_empty(&self) -> bool {
-        self.features.is_empty()
+        self.len() == 0
     }
 
     /// Export all features as GeoJSON.
@@ -248,5 +271,78 @@ mod tests {
         let geojson = store.export_geojson();
         assert_eq!(geojson["type"], "FeatureCollection");
         assert_eq!(geojson["features"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    fn feature(id: &str, geometry: OfflineGeometry) -> OfflineFeature {
+        OfflineFeature {
+            id: id.to_string(),
+            layer: "test".to_string(),
+            geometry,
+            properties: HashMap::new(),
+            created_at: 0,
+            modified_at: 0,
+            sync_status: SyncStatus::PendingCreate,
+        }
+    }
+
+    fn ring(min: f64, max: f64) -> OfflineGeometry {
+        OfflineGeometry::Polygon(vec![vec![
+            Coordinate::new(min, min),
+            Coordinate::new(min, max),
+            Coordinate::new(max, max),
+            Coordinate::new(max, min),
+            Coordinate::new(min, min),
+        ]])
+    }
+
+    /// A query box inside a large polygon must still find it, even though the
+    /// polygon has no vertex inside the box.
+    #[test]
+    fn test_query_finds_enclosing_polygon() {
+        let mut store = OfflineStore::new();
+        store.upsert(feature("big", ring(-10.0, 10.0)));
+        assert_eq!(store.query_bbox(1.0, 2.0, 1.0, 2.0).len(), 1);
+    }
+
+    /// A line crossing the box with both vertices outside must match.
+    #[test]
+    fn test_query_finds_crossing_line() {
+        let mut store = OfflineStore::new();
+        store.upsert(feature(
+            "road",
+            OfflineGeometry::LineString(vec![
+                Coordinate::new(0.0, -10.0),
+                Coordinate::new(0.0, 10.0),
+            ]),
+        ));
+        assert_eq!(store.query_bbox(-1.0, 1.0, -1.0, 1.0).len(), 1);
+    }
+
+    /// Something well outside the box must not match.
+    #[test]
+    fn test_query_skips_distant_feature() {
+        let mut store = OfflineStore::new();
+        store.upsert(feature("far", ring(40.0, 50.0)));
+        assert_eq!(store.query_bbox(1.0, 2.0, 1.0, 2.0).len(), 0);
+    }
+
+    /// len must agree with what query and export actually return.
+    #[test]
+    fn test_len_excludes_pending_delete() {
+        let mut store = OfflineStore::new();
+        store.upsert(feature(
+            "p",
+            OfflineGeometry::Point(Coordinate::new(1.5, 1.5)),
+        ));
+        assert_eq!(store.len(), 1);
+        store.mark_deleted("p").unwrap();
+        assert_eq!(store.len(), 0);
+        assert!(store.is_empty());
+        assert_eq!(store.query_bbox(0.0, 5.0, 0.0, 5.0).len(), 0);
     }
 }

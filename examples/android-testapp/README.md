@@ -5,6 +5,9 @@ terravista over the C ABI: touch events go into the SDK gesture recognizer, the 
 set and screen placements come out of it, and tile bytes are stored in and read back from the
 SDK tile cache. The app only does HTTP, PNG decode, and `Canvas.drawBitmap`.
 
+Drag to pan, pinch to zoom and twist to rotate. A single tap rotates 45 degrees,
+which exists because `adb shell input` cannot inject a two-finger twist.
+
 One activity, one view, one JNI class:
 
 | File | Role |
@@ -43,8 +46,14 @@ Environment, override by exporting before `build.sh`:
 - **API 35 draws edge to edge.** The view spans behind the status bar, so the readout is
   offset by the top window inset. Without that it renders underneath the system bars.
 - OSM tiles need a real `User-Agent` or you get HTTP 403.
-- Tiles are @1x and drawn at `256 * dpr`, so they look soft on a HiDPI screen. A production
-  app would fetch @2x tiles or bias the tile zoom up.
+- **The SDK biases tile zoom by screen density**, so on a 2.625x screen camera zoom 12
+  fetches z13 tiles. The app therefore caps camera zoom at `19 - log2(dpr)`, since OSM
+  serves nothing past z19.
+- Rotation is applied by the app: the SDK returns north-up placements and the view
+  rotates the canvas by `-bearing`. The readout is drawn after `restore()` so it stays
+  upright.
+- While a tile loads the view blits the matching crop of an already-decoded parent tile,
+  so panning shows blurry map rather than blank white.
 
 ## Verify on device
 

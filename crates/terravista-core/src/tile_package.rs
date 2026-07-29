@@ -209,7 +209,12 @@ impl TilePackage {
             return Err(Error::InvalidInput("invalid tile package format".into()));
         }
 
-        let _version = data[4];
+        if data[4] != 1 {
+            return Err(Error::InvalidInput(format!(
+                "unsupported tile package version {}",
+                data[4]
+            )));
+        }
         let meta_len = u32::from_le_bytes([data[5], data[6], data[7], data[8]]) as usize;
 
         if data.len() < 9 + meta_len + 4 {
@@ -285,34 +290,25 @@ impl TilePackage {
             .and_then(|s| s.parse().ok())
             .unwrap_or(18);
 
-        let bounds = if let Some(bounds_str) = metadata.get("bounds") {
-            let parts: Vec<f64> = bounds_str
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            if parts.len() == 4 {
-                BoundingBox {
-                    min_lon: parts[0],
-                    min_lat: parts[1],
-                    max_lon: parts[2],
-                    max_lat: parts[3],
-                }
-            } else {
-                BoundingBox {
-                    min_lat: -90.0,
-                    min_lon: -180.0,
-                    max_lat: 90.0,
-                    max_lon: 180.0,
-                }
-            }
-        } else {
-            BoundingBox {
-                min_lat: -90.0,
-                min_lon: -180.0,
-                max_lat: 90.0,
-                max_lon: 180.0,
-            }
+        let whole_world = BoundingBox {
+            min_lat: -90.0,
+            min_lon: -180.0,
+            max_lat: 90.0,
+            max_lon: 180.0,
         };
+
+        // metadata comes off disk unvalidated, so route it through `new` rather
+        // than building a box `new` would have rejected
+        let bounds = metadata
+            .get("bounds")
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|p| p.trim().parse::<f64>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|parts| parts.len() == 4)
+            .and_then(|p| BoundingBox::new(p[1], p[0], p[3], p[2]).ok())
+            .unwrap_or(whole_world);
 
         let definition = PackageDefinition {
             name,
@@ -330,16 +326,38 @@ impl TilePackage {
     }
 }
 
+/// Deepest zoom the tile grid maths can represent. Beyond this `2^z` overflows
+/// a `u32`, and package metadata is not trusted to stay in range.
+pub const MAX_PACKAGE_ZOOM: u8 = 22;
+
+/// Tile bounds covering `bounds` at zoom `z`, ordered low to high so an
+/// inverted bounding box cannot underflow the callers' subtractions.
+fn tile_bounds(bounds: &BoundingBox, z: u8) -> (u32, u32, u32, u32) {
+    let n = 2u32.pow(z as u32);
+    let (xa, xb) = (
+        lon_to_tile_x(bounds.min_lon, n),
+        lon_to_tile_x(bounds.max_lon, n),
+    );
+    // y is inverted, north edge gives the smaller row
+    let (ya, yb) = (
+        lat_to_tile_y(bounds.max_lat, n),
+        lat_to_tile_y(bounds.min_lat, n),
+    );
+    (xa.min(xb), xa.max(xb), ya.min(yb), ya.max(yb))
+}
+
+/// Clamp a requested zoom span into the representable range. An inverted span
+/// yields an empty range.
+fn zoom_range(min_zoom: u8, max_zoom: u8) -> std::ops::RangeInclusive<u8> {
+    min_zoom.min(MAX_PACKAGE_ZOOM)..=max_zoom.min(MAX_PACKAGE_ZOOM)
+}
+
 /// Calculate which tiles are needed for a given region and zoom range.
 pub fn tiles_for_region(bounds: &BoundingBox, min_zoom: u8, max_zoom: u8) -> Vec<TileCoord> {
     let mut tiles = Vec::new();
 
-    for z in min_zoom..=max_zoom {
-        let n = 2u32.pow(z as u32);
-        let x_min = lon_to_tile_x(bounds.min_lon, n);
-        let x_max = lon_to_tile_x(bounds.max_lon, n);
-        let y_min = lat_to_tile_y(bounds.max_lat, n); // note: y is inverted
-        let y_max = lat_to_tile_y(bounds.min_lat, n);
+    for z in zoom_range(min_zoom, max_zoom) {
+        let (x_min, x_max, y_min, y_max) = tile_bounds(bounds, z);
 
         for x in x_min..=x_max {
             for y in y_min..=y_max {
@@ -361,12 +379,8 @@ pub fn estimate_package(
     let mut tile_count = 0u64;
     let mut tiles_per_zoom = Vec::new();
 
-    for z in min_zoom..=max_zoom {
-        let n = 2u32.pow(z as u32);
-        let x_min = lon_to_tile_x(bounds.min_lon, n);
-        let x_max = lon_to_tile_x(bounds.max_lon, n);
-        let y_min = lat_to_tile_y(bounds.max_lat, n);
-        let y_max = lat_to_tile_y(bounds.min_lat, n);
+    for z in zoom_range(min_zoom, max_zoom) {
+        let (x_min, x_max, y_min, y_max) = tile_bounds(bounds, z);
 
         let count = (x_max - x_min + 1) as u64 * (y_max - y_min + 1) as u64;
         tiles_per_zoom.push((z, count));
@@ -375,7 +389,7 @@ pub fn estimate_package(
 
     PackageEstimate {
         tile_count,
-        estimated_bytes: tile_count * avg_tile_bytes,
+        estimated_bytes: tile_count.saturating_mul(avg_tile_bytes),
         tiles_per_zoom,
     }
 }
@@ -526,5 +540,88 @@ mod tests {
         pkg.insert_tile(TileCoord { z: 0, x: 0, y: 0 }, vec![0; 100]);
         pkg.insert_tile(TileCoord { z: 1, x: 0, y: 0 }, vec![0; 200]);
         assert_eq!(pkg.total_bytes(), 300);
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    fn inverted() -> BoundingBox {
+        // what `new` would reject, but `from_bytes` and struct literals allow
+        BoundingBox {
+            min_lat: 41.0,
+            min_lon: -73.0,
+            max_lat: 40.0,
+            max_lon: -74.0,
+        }
+    }
+
+    /// An inverted box used to underflow the tile-count subtraction.
+    #[test]
+    fn test_inverted_bounds_does_not_panic() {
+        let estimate = estimate_package(&inverted(), 10, 12, 20_000);
+        assert!(estimate.tile_count > 0);
+        // the two entry points must agree rather than one returning nothing
+        assert_eq!(
+            estimate.tile_count as usize,
+            tiles_for_region(&inverted(), 10, 12).len()
+        );
+    }
+
+    /// Zoom levels past the representable range must clamp, not overflow.
+    #[test]
+    fn test_extreme_zoom_does_not_panic() {
+        // a tiny box, so clamping to z22 stays cheap to enumerate
+        let bounds = BoundingBox::new(40.0, -74.0, 40.001, -73.999).unwrap();
+        let estimate = estimate_package(&bounds, 32, 40, 1);
+        assert!(
+            estimate
+                .tiles_per_zoom
+                .iter()
+                .all(|(z, _)| *z <= MAX_PACKAGE_ZOOM)
+        );
+        assert!(
+            tiles_for_region(&bounds, 32, 40)
+                .iter()
+                .all(|t| t.z <= MAX_PACKAGE_ZOOM)
+        );
+    }
+
+    /// An inverted zoom span is empty rather than panicking.
+    #[test]
+    fn test_inverted_zoom_span_is_empty() {
+        let bounds = BoundingBox::new(40.0, -74.0, 41.0, -73.0).unwrap();
+        assert!(tiles_for_region(&bounds, 12, 10).is_empty());
+    }
+
+    /// A package claiming an unsupported version must be rejected, not misparsed.
+    #[test]
+    fn test_unsupported_version_rejected() {
+        let package = TilePackage::new(PackageDefinition {
+            name: "test".to_string(),
+            bounds: BoundingBox::new(40.0, -74.0, 41.0, -73.0).unwrap(),
+            min_zoom: 10,
+            max_zoom: 12,
+            format: TileFormat::Png,
+        });
+        let mut bytes = package.to_bytes();
+        bytes[4] = 2;
+        assert!(TilePackage::from_bytes(&bytes).is_err());
+    }
+
+    /// Bounds read back from metadata go through validation.
+    #[test]
+    fn test_roundtrip_bounds_are_valid() {
+        let package = TilePackage::new(PackageDefinition {
+            name: "test".to_string(),
+            bounds: BoundingBox::new(40.0, -74.0, 41.0, -73.0).unwrap(),
+            min_zoom: 10,
+            max_zoom: 12,
+            format: TileFormat::Png,
+        });
+        let restored = TilePackage::from_bytes(&package.to_bytes()).unwrap();
+        let b = &restored.definition.bounds;
+        assert!(b.min_lat < b.max_lat && b.min_lon < b.max_lon);
     }
 }

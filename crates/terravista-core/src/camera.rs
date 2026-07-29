@@ -79,9 +79,17 @@ impl Camera {
         self
     }
 
-    /// Calculate the tile zoom level (integer) for tile fetching.
+    /// Calculate the tile zoom level (integer) for tile fetching, ignoring
+    /// screen density. Prefer [`Camera::tile_zoom_for`] when you have a viewport.
     pub fn tile_zoom(&self) -> u8 {
         self.zoom.round().clamp(0.0, 22.0) as u8
+    }
+
+    /// Integer tile zoom biased by device pixel ratio, so one 256 px tile lands
+    /// on 256 device pixels instead of being upscaled and blurred.
+    pub fn tile_zoom_for(&self, viewport: &Viewport) -> u8 {
+        let bias = (viewport.device_pixel_ratio.max(0.01) as f64).log2();
+        (self.zoom + bias).round().clamp(0.0, 22.0) as u8
     }
 
     /// Web Mercator world size in device pixels at the current zoom.
@@ -90,6 +98,9 @@ impl Camera {
     }
 
     /// Get the visible bounding box at current camera state.
+    ///
+    /// When the camera is rotated this is the bounding box of the rotated
+    /// viewport, so it covers every tile the screen can show.
     pub fn visible_bounds(&self, viewport: &Viewport) -> VisibleBounds {
         let world = self.world_size(viewport);
         let cx = lon_to_world_x(self.center.longitude, world);
@@ -97,16 +108,33 @@ impl Camera {
         let half_w = viewport.width as f64 / 2.0;
         let half_h = viewport.height as f64 / 2.0;
 
+        let (sin_b, cos_b) = self.bearing.to_radians().sin_cos();
+        let ext_x = half_w * cos_b.abs() + half_h * sin_b.abs();
+        let ext_y = half_w * sin_b.abs() + half_h * cos_b.abs();
+
         VisibleBounds {
-            min_lon: world_x_to_lon(cx - half_w, world),
-            max_lon: world_x_to_lon(cx + half_w, world),
-            min_lat: world_y_to_lat((cy + half_h).min(world), world),
-            max_lat: world_y_to_lat((cy - half_h).max(0.0), world),
+            min_lon: world_x_to_lon(cx - ext_x, world),
+            max_lon: world_x_to_lon(cx + ext_x, world),
+            min_lat: world_y_to_lat((cy + ext_y).min(world), world),
+            max_lat: world_y_to_lat((cy - ext_y).max(0.0), world),
         }
     }
 
-    /// Pan the camera by device-pixel deltas.
+    /// Rotate a screen-space delta into north-up map space.
+    ///
+    /// The host draws the map rotated by `-bearing`, so screen deltas have to
+    /// come back the other way before they touch the centre.
+    fn screen_to_map(&self, dx: f64, dy: f64) -> (f64, f64) {
+        if self.bearing == 0.0 {
+            return (dx, dy);
+        }
+        let (sin_b, cos_b) = self.bearing.to_radians().sin_cos();
+        (dx * cos_b - dy * sin_b, dx * sin_b + dy * cos_b)
+    }
+
+    /// Pan the camera by device-pixel deltas in screen space.
     pub fn pan(&mut self, dx: f64, dy: f64, viewport: &Viewport) {
+        let (dx, dy) = self.screen_to_map(dx, dy);
         let world = self.world_size(viewport);
         let x = lon_to_world_x(self.center.longitude, world) - dx;
         let y = (lat_to_world_y(self.center.latitude, world) - dy).clamp(0.0, world);
@@ -119,9 +147,39 @@ impl Camera {
         self.zoom = (self.zoom + delta).clamp(0.0, 22.0);
     }
 
-    /// Zoom to a specific level, keeping a point fixed on screen.
-    pub fn zoom_to(&mut self, target_zoom: f64, _anchor_x: f64, _anchor_y: f64) {
-        self.zoom = target_zoom.clamp(0.0, 22.0);
+    /// Zoom to a specific level, keeping the point under `anchor` fixed on screen.
+    ///
+    /// The anchor is in device pixels from the viewport's top-left corner.
+    pub fn zoom_to(&mut self, target_zoom: f64, anchor_x: f64, anchor_y: f64, viewport: &Viewport) {
+        let target = target_zoom.clamp(0.0, 22.0);
+        if target == self.zoom {
+            return;
+        }
+
+        let (off_x, off_y) = self.screen_to_map(
+            anchor_x - viewport.width as f64 / 2.0,
+            anchor_y - viewport.height as f64 / 2.0,
+        );
+
+        // the coordinate sitting under the anchor before the zoom
+        let before = self.world_size(viewport);
+        let anchor_lon = world_x_to_lon(
+            lon_to_world_x(self.center.longitude, before) + off_x,
+            before,
+        );
+        let anchor_lat = world_y_to_lat(
+            (lat_to_world_y(self.center.latitude, before) + off_y).clamp(0.0, before),
+            before,
+        );
+
+        self.zoom = target;
+
+        // put it back under the anchor at the new scale
+        let after = self.world_size(viewport);
+        let x = lon_to_world_x(anchor_lon, after) - off_x;
+        let y = (lat_to_world_y(anchor_lat, after) - off_y).clamp(0.0, after);
+        self.center.longitude = wrap_lon(world_x_to_lon(x, after));
+        self.center.latitude = world_y_to_lat(y, after);
     }
 }
 
@@ -294,6 +352,84 @@ mod tests {
         let vp = Viewport::new(800, 600, 1.0);
         cam.pan(100.0, 0.0, &vp);
         assert!(cam.center.longitude < 0.0);
+    }
+
+    /// Zooming about an anchor must leave the coordinate under that anchor put.
+    #[test]
+    fn test_zoom_to_holds_anchor() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let anchor_x = 250.0;
+        let anchor_y = 1800.0;
+
+        let mut cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        let geo_at = |c: &Camera| {
+            let world = c.world_size(&vp);
+            let x = lon_to_world_x(c.center.longitude, world) + anchor_x - vp.width as f64 / 2.0;
+            let y = lat_to_world_y(c.center.latitude, world) + anchor_y - vp.height as f64 / 2.0;
+            (world_y_to_lat(y, world), world_x_to_lon(x, world))
+        };
+
+        let (lat0, lon0) = geo_at(&cam);
+        cam.zoom_to(14.0, anchor_x, anchor_y, &vp);
+        let (lat1, lon1) = geo_at(&cam);
+
+        assert!((cam.zoom - 14.0).abs() < 1e-12);
+        assert!((lat1 - lat0).abs() < 1e-9, "lat drifted {lat0} -> {lat1}");
+        assert!((lon1 - lon0).abs() < 1e-9, "lon drifted {lon0} -> {lon1}");
+    }
+
+    /// Zooming about the exact centre must not move the centre at all.
+    #[test]
+    fn test_zoom_to_centre_keeps_centre() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let mut cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        cam.zoom_to(15.0, vp.width as f64 / 2.0, vp.height as f64 / 2.0, &vp);
+        assert!((cam.center.latitude - 51.5).abs() < 1e-9);
+        assert!((cam.center.longitude - -0.1).abs() < 1e-9);
+    }
+
+    /// One tile should land on 256 device pixels, not be upscaled by the density.
+    #[test]
+    fn test_tile_zoom_is_density_biased() {
+        let cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        assert_eq!(cam.tile_zoom_for(&Viewport::new(1080, 2280, 1.0)), 12);
+        assert_eq!(cam.tile_zoom_for(&Viewport::new(1080, 2280, 2.0)), 13);
+        assert_eq!(cam.tile_zoom_for(&Viewport::new(1080, 2280, 4.0)), 14);
+        // still clamped at the top of the range
+        let deep = Camera::new(Coordinate::new(51.5, -0.1), 22.0);
+        assert_eq!(deep.tile_zoom_for(&Viewport::new(1080, 2280, 3.0)), 22);
+    }
+
+    /// A rotated viewport covers ground outside its unrotated box.
+    #[test]
+    fn test_visible_bounds_grows_when_rotated() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let north_up = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        let turned = Camera::new(Coordinate::new(51.5, -0.1), 12.0).with_bearing(45.0);
+
+        let a = north_up.visible_bounds(&vp);
+        let b = turned.visible_bounds(&vp);
+        assert!(
+            b.max_lon - b.min_lon > a.max_lon - a.min_lon,
+            "rotated bounds must be wider"
+        );
+        // 90 degrees swaps the extents rather than growing them
+        let quarter = Camera::new(Coordinate::new(51.5, -0.1), 12.0).with_bearing(90.0);
+        let q = quarter.visible_bounds(&vp);
+        let world = quarter.world_size(&vp);
+        let q_px = lon_to_world_x(q.max_lon, world) - lon_to_world_x(q.min_lon, world);
+        assert!((q_px - vp.height as f64).abs() < 1e-6);
+    }
+
+    /// Panning a rotated map follows the finger, not the meridian.
+    #[test]
+    fn test_pan_follows_screen_when_rotated() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let mut cam = Camera::new(Coordinate::new(0.0, 0.0), 10.0).with_bearing(90.0);
+        cam.pan(100.0, 0.0, &vp);
+        // at 90 degrees a horizontal drag moves the camera in latitude
+        assert!(cam.center.latitude.abs() > 1e-6, "expected latitude change");
+        assert!(cam.center.longitude.abs() < 1e-9, "longitude should hold");
     }
 
     #[test]

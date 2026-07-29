@@ -23,7 +23,7 @@ cannot fetch or draw a tile on its own.
 **What works today**
 
 - Camera and viewport: Web Mercator projection, zoom, bearing, pitch, visible bounds, tile range
-- Gesture recognition: pan, pinch-zoom, rotate, tilt state machine
+- Gesture recognition: pan, and a two-finger pinch that zooms and rotates together
 - Tile cache: in-memory LRU keyed by tile coordinate, with XYZ URL template building
 - Offline vector store: in-memory feature CRUD with sync status tracking
 - Style engine: parses Mapbox GL style JSON and interpolates properties by zoom
@@ -89,10 +89,15 @@ HTTP fetching and MVT decoding are targeted for v0.2, the rendering backends for
 
 ### 👆 Gesture Recognition
 
-- Multi-touch state machine: Idle → Pan → PinchZoom → Rotate
-- Touch event processing with configurable thresholds
-- Camera delta output (pan pixels, zoom delta, rotation degrees, pitch delta)
+- Multi-touch state machine: Idle → Pan → PinchZoom
+- A two-finger gesture zooms and rotates at once, with a 5° dead zone before rotation starts
+- Zoom is anchored, so the point between the fingers stays put
+- Camera delta output (pan pixels, zoom delta, rotation degrees)
 - Platform-agnostic — works with any touch input system
+
+Pitch is camera state that the host can set, not a recognised gesture. Rendering a
+pitched map needs a perspective transform the flat `TilePlacement` cannot express,
+so that waits for the GPU backends in v0.3.
 
 ### 📦 Offline Tile Cache
 
@@ -235,19 +240,60 @@ void tv_map_set_viewport(TvMapState* state, uint32_t width, uint32_t height, flo
 double tv_map_get_zoom(const TvMapState* state);
 double tv_map_get_center_lat(const TvMapState* state);
 double tv_map_get_center_lon(const TvMapState* state);
+double tv_map_get_bearing(const TvMapState* state);
+double tv_map_get_pitch(const TvMapState* state);
 ```
+
+A worked example that drives all of this from an app is in
+[`examples/android-testapp`](examples/android-testapp).
 
 ### Gesture Input
 
 ```c
 void tv_map_pan(TvMapState* state, double dx, double dy);
 void tv_map_zoom_by(TvMapState* state, double delta);
+
+// Feed raw touches through the recognizer. Returns the TV_GESTURE_* applied.
+int32_t tv_map_touch(TvMapState* state, int32_t phase, const double* xs,
+                     const double* ys, const uint64_t* ids, size_t count);
 ```
+
+`phase` is one of `TV_TOUCH_BEGIN`, `_MOVE`, `_END`, `_CANCEL`. The return value is
+`TV_GESTURE_NONE`, `_PAN`, `_ZOOM`, `_PINCH`, `_ROTATE` or `_PITCH`.
+
+### Visible Tiles
+
+```c
+typedef struct { uint8_t zoom; uint32_t x_min, x_max, y_min, y_max; } TvTileRange;
+typedef struct {
+    uint8_t z; uint32_t x, y;
+    float screen_x, screen_y, size;  // device pixels
+} TvTilePlacement;
+
+bool tv_map_tile_range(const TvMapState* state, TvTileRange* out);
+
+// Recompute the frame's tile set, then read placements back by index.
+uint32_t tv_map_visible_tile_count(TvMapState* state);
+bool tv_map_visible_tile_at(const TvMapState* state, uint32_t i, TvTilePlacement* out);
+```
+
+Placements are north-up. When `bearing` is non-zero the host rotates its canvas by
+`-bearing` about the viewport centre, and the tile range already covers the corners
+the rotation exposes.
 
 ### Tile Cache
 
 ```c
 void tv_map_set_tile_url(TvMapState* state, const char* url_template);
+char* tv_map_tile_url(const TvMapState* state, uint8_t z, uint32_t x, uint32_t y);
+
+bool tv_cache_put(TvMapState* state, uint8_t z, uint32_t x, uint32_t y,
+                  const uint8_t* bytes, size_t len, const char* content_type);
+bool tv_cache_has(const TvMapState* state, uint8_t z, uint32_t x, uint32_t y);
+// Returns the tile's full length, copying at most `cap` bytes. 0 when absent.
+size_t tv_cache_get(TvMapState* state, uint8_t z, uint32_t x, uint32_t y,
+                    uint8_t* out, size_t cap);
+
 uint32_t tv_cache_tile_count(const TvMapState* state);
 uint64_t tv_cache_size_bytes(const TvMapState* state);
 void tv_cache_clear(TvMapState* state);

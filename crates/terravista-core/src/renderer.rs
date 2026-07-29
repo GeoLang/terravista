@@ -140,7 +140,7 @@ impl Default for FrameBuilder {
 /// Positions and sizes are device pixels, matching `Viewport::width`/`height`.
 pub fn visible_tiles(camera: &Camera, viewport: &Viewport) -> Vec<TilePlacement> {
     let bounds = camera.visible_bounds(viewport);
-    let zoom = camera.tile_zoom();
+    let zoom = camera.tile_zoom_for(viewport);
     let range = bounds.tile_range(zoom);
 
     let world = camera.world_size(viewport);
@@ -252,7 +252,7 @@ mod tests {
 
         let expected = camera
             .visible_bounds(&viewport)
-            .tile_range(camera.tile_zoom());
+            .tile_range(camera.tile_zoom_for(&viewport));
         assert!(hit.coord.x >= expected.x_min && hit.coord.x <= expected.x_max);
         assert!(hit.coord.y >= expected.y_min && hit.coord.y <= expected.y_max);
     }

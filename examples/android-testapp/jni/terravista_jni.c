@@ -34,6 +34,7 @@ extern void tv_map_set_viewport(TvMapState *state, uint32_t w, uint32_t h, float
 extern double tv_map_get_zoom(const TvMapState *state);
 extern double tv_map_get_center_lat(const TvMapState *state);
 extern double tv_map_get_center_lon(const TvMapState *state);
+extern void tv_map_set_bearing(TvMapState *state, double bearing);
 extern double tv_map_get_bearing(const TvMapState *state);
 extern double tv_map_get_pitch(const TvMapState *state);
 extern void tv_map_set_tile_url(TvMapState *state, const char *url);
@@ -113,6 +114,12 @@ JNIEXPORT jdouble JNICALL FN(getCenterLon)(JNIEnv *env, jclass c, jlong h) {
     (void)env;
     (void)c;
     return tv_map_get_center_lon(STATE(h));
+}
+
+JNIEXPORT void JNICALL FN(setBearing)(JNIEnv *env, jclass c, jlong h, jdouble bearing) {
+    (void)env;
+    (void)c;
+    tv_map_set_bearing(STATE(h), bearing);
 }
 
 JNIEXPORT jdouble JNICALL FN(getBearing)(JNIEnv *env, jclass c, jlong h) {

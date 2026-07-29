@@ -209,7 +209,7 @@ pub unsafe extern "C" fn tv_map_tile_range(
     let range = s
         .camera
         .visible_bounds(&s.viewport)
-        .tile_range(s.camera.tile_zoom());
+        .tile_range(s.camera.tile_zoom_for(&s.viewport));
     *out = TvTileRange {
         zoom: range.zoom,
         x_min: range.x_min,
@@ -300,6 +300,8 @@ pub const TV_GESTURE_PAN: i32 = 1;
 pub const TV_GESTURE_ZOOM: i32 = 2;
 pub const TV_GESTURE_ROTATE: i32 = 3;
 pub const TV_GESTURE_PITCH: i32 = 4;
+/// A two-finger gesture, zoom and rotation applied together.
+pub const TV_GESTURE_PINCH: i32 = 5;
 
 /// Feed a touch event through the gesture recognizer and apply it to the camera.
 ///
@@ -358,6 +360,7 @@ pub unsafe extern "C" fn tv_map_touch(
         GestureResult::None => TV_GESTURE_NONE,
         GestureResult::Pan { .. } => TV_GESTURE_PAN,
         GestureResult::Zoom { .. } => TV_GESTURE_ZOOM,
+        GestureResult::Pinch { .. } => TV_GESTURE_PINCH,
         GestureResult::Rotate { .. } => TV_GESTURE_ROTATE,
         GestureResult::Pitch { .. } => TV_GESTURE_PITCH,
     }

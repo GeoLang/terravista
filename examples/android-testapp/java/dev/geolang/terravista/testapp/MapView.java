@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -31,7 +32,13 @@ public class MapView extends View {
     private static final String TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
     private static final String USER_AGENT =
             "TerraVistaAndroidTest/0.1 (+https://github.com/GeoLang/terravista)";
-    private static final int MAX_DECODED_TILES = 64;
+    private static final int MAX_DECODED_TILES = 128;
+    /** openstreetmap.org serves no tiles past z19. */
+    private static final double MAX_SOURCE_ZOOM = 19.0;
+    /** How many zoom levels up to search for a stand-in while a tile loads. */
+    private static final int MAX_PARENT_LEVELS = 4;
+    /** Movement below this still counts as a tap, which rotates the map. */
+    private static final float TAP_SLOP_PX = 24f;
 
     /** The SDK is not thread-safe, so every FFI call holds this lock. */
     private final Object sdk = new Object();
@@ -58,6 +65,10 @@ public class MapView extends View {
     private final float[] xys = new float[3];
     private final int[] range = new int[5];
     private final RectF dst = new RectF();
+    private final Rect src = new Rect();
+
+    /** Camera zoom above which the SDK would ask for tiles the source lacks. */
+    private final double maxCameraZoom;
 
     private int lastGesture = TerraVista.GESTURE_NONE;
     private int frame = 0;
@@ -65,9 +76,15 @@ public class MapView extends View {
     /** API 35 draws edge to edge, so keep the readout clear of the status bar. */
     private int topInset = 0;
 
+    private float downX;
+    private float downY;
+    private boolean dragged;
+
     public MapView(Context context) {
         super(context);
         float dpr = getResources().getDisplayMetrics().density;
+        // the SDK biases tile zoom by the density, so cap the camera below that
+        maxCameraZoom = MAX_SOURCE_ZOOM - (Math.log(dpr) / Math.log(2.0));
 
         synchronized (sdk) {
             handle = TerraVista.create(1, 1, dpr);
@@ -105,13 +122,25 @@ public class MapView extends View {
         int phase;
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                downX = event.getX();
+                downY = event.getY();
+                dragged = false;
+                phase = TerraVista.TOUCH_BEGIN;
+                break;
             case MotionEvent.ACTION_POINTER_DOWN:
+                dragged = true; // a second finger is never a tap
                 phase = TerraVista.TOUCH_BEGIN;
                 break;
             case MotionEvent.ACTION_MOVE:
+                if (Math.hypot(event.getX() - downX, event.getY() - downY) > TAP_SLOP_PX) {
+                    dragged = true;
+                }
                 phase = TerraVista.TOUCH_MOVE;
                 break;
             case MotionEvent.ACTION_UP:
+                if (!dragged) {
+                    rotateByQuarterTurn();
+                }
                 phase = TerraVista.TOUCH_END;
                 break;
             case MotionEvent.ACTION_POINTER_UP:
@@ -150,6 +179,10 @@ public class MapView extends View {
 
         synchronized (sdk) {
             lastGesture = TerraVista.touch(handle, phase, xs, ys, ids);
+            // stop a pinch from running past the deepest zoom OSM serves
+            if (TerraVista.getZoom(handle) > maxCameraZoom) {
+                TerraVista.setZoom(handle, maxCameraZoom);
+            }
         }
         if (phase == TerraVista.TOUCH_END) {
             logState("touch-end", readoutLines(lastVisibleCount));
@@ -162,10 +195,18 @@ public class MapView extends View {
         super.onDraw(canvas);
 
         int count;
+        double bearing;
         synchronized (sdk) {
             count = TerraVista.visibleTileCount(handle);
+            bearing = TerraVista.getBearing(handle);
         }
         lastVisibleCount = count;
+
+        // placements come back north-up, so spin the canvas to face the bearing
+        canvas.save();
+        if (bearing != 0.0) {
+            canvas.rotate((float) -bearing, getWidth() / 2f, getHeight() / 2f);
+        }
 
         for (int i = 0; i < count; i++) {
             boolean ok;
@@ -195,13 +236,48 @@ public class MapView extends View {
                 }
             }
 
+            dst.set(xys[0], xys[1], xys[0] + xys[2], xys[1] + xys[2]);
             if (bmp != null) {
-                dst.set(xys[0], xys[1], xys[0] + xys[2], xys[1] + xys[2]);
                 canvas.drawBitmap(bmp, null, dst, tilePaint);
+            } else {
+                drawParentTile(canvas, z, x, y);
             }
         }
 
+        canvas.restore();
+
         drawReadout(canvas, count);
+    }
+
+    /** Tapping rotates 45 degrees, which is the only way to drive bearing from adb. */
+    private void rotateByQuarterTurn() {
+        synchronized (sdk) {
+            TerraVista.setBearing(handle, (TerraVista.getBearing(handle) + 45.0) % 360.0);
+        }
+    }
+
+    /**
+     * Blit the matching crop of an already-decoded lower-zoom tile into {@link #dst},
+     * so panning shows blurry map instead of blank white while tiles load.
+     */
+    private void drawParentTile(Canvas canvas, int z, int x, int y) {
+        for (int up = 1; up <= MAX_PARENT_LEVELS && z - up >= 0; up++) {
+            Bitmap parent = decoded.get(tileKey(z - up, x >> up, y >> up));
+            if (parent == null) {
+                continue;
+            }
+
+            int span = 1 << up;
+            int cell = parent.getWidth() / span;
+            if (cell < 1) {
+                return;
+            }
+            int left = (x & (span - 1)) * cell;
+            int top = (y & (span - 1)) * cell;
+            src.set(left, top, left + cell, top + cell);
+            canvas.drawBitmap(parent, src, dst, tilePaint);
+            return;
+        }
     }
 
     private void logState(String why, String[] lines) {

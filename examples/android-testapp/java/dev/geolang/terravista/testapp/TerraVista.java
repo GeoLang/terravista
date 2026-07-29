@@ -31,6 +31,7 @@ public final class TerraVista {
     public static native double getZoom(long handle);
     public static native double getCenterLat(long handle);
     public static native double getCenterLon(long handle);
+    public static native void setBearing(long handle, double bearing);
     public static native double getBearing(long handle);
     public static native double getPitch(long handle);
 

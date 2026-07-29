@@ -111,19 +111,20 @@ impl ColorValue {
 /// Parse a hex color string to RGBA floats.
 pub fn parse_color(hex: &str) -> Option<[f32; 4]> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() >= 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
-        let a = if hex.len() == 8 {
-            u8::from_str_radix(&hex[6..8], 16).ok()? as f32 / 255.0
-        } else {
-            1.0
-        };
-        Some([r, g, b, a])
-    } else {
-        None
+    // byte slicing below would panic mid-character on non-ASCII input
+    if !hex.is_ascii() || (hex.len() != 6 && hex.len() != 8) {
+        return None;
     }
+
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
+    let a = if hex.len() == 8 {
+        u8::from_str_radix(&hex[6..8], 16).ok()? as f32 / 255.0
+    } else {
+        1.0
+    };
+    Some([r, g, b, a])
 }
 
 #[cfg(test)]
@@ -151,5 +152,27 @@ mod tests {
         let c = parse_color("#ff0000").unwrap();
         assert!((c[0] - 1.0).abs() < 0.01);
         assert!((c[1]).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    /// Byte slicing a non-ASCII string used to panic mid-character.
+    #[test]
+    fn test_non_ascii_colour_returns_none() {
+        assert_eq!(parse_color("aé0000"), None);
+        assert_eq!(parse_color("#éé0000"), None);
+    }
+
+    /// Only #rrggbb and #rrggbbaa are valid, trailing bytes are not ignored.
+    #[test]
+    fn test_wrong_length_colour_returns_none() {
+        assert_eq!(parse_color("#ff00001"), None);
+        assert_eq!(parse_color("#ff0000ff0000"), None);
+        assert_eq!(parse_color("#fff"), None);
+        assert!(parse_color("#ff0000").is_some());
+        assert!(parse_color("#ff0000aa").is_some());
     }
 }
