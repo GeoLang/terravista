@@ -120,6 +120,37 @@ impl Camera {
         }
     }
 
+    /// Screen position of a coordinate, in device pixels from the viewport's
+    /// top-left corner.
+    ///
+    /// North-up, like [`crate::renderer::visible_tiles`]: the host draws map
+    /// content unrotated and spins the canvas by `-bearing`.
+    pub fn project(&self, coord: &Coordinate, viewport: &Viewport) -> (f64, f64) {
+        let world = self.world_size(viewport);
+        let mut dx =
+            lon_to_world_x(coord.longitude, world) - lon_to_world_x(self.center.longitude, world);
+        // take the short way round, so a point just past the antimeridian does
+        // not land a whole world away
+        if dx > world / 2.0 {
+            dx -= world;
+        } else if dx < -world / 2.0 {
+            dx += world;
+        }
+        let dy =
+            lat_to_world_y(coord.latitude, world) - lat_to_world_y(self.center.latitude, world);
+        (
+            viewport.width as f64 / 2.0 + dx,
+            viewport.height as f64 / 2.0 + dy,
+        )
+    }
+
+    /// Ground metres covered by one device pixel, at the camera's latitude.
+    pub fn metres_per_pixel(&self, viewport: &Viewport) -> f64 {
+        const EQUATOR_M: f64 = 40_075_016.686;
+        let lat = self.center.latitude.clamp(-MAX_LATITUDE, MAX_LATITUDE);
+        EQUATOR_M * lat.to_radians().cos() / self.world_size(viewport)
+    }
+
     /// Rotate a screen-space delta into north-up map space.
     ///
     /// The host draws the map rotated by `-bearing`, so screen deltas have to
@@ -430,6 +461,89 @@ mod tests {
         // at 90 degrees a horizontal drag moves the camera in latitude
         assert!(cam.center.latitude.abs() > 1e-6, "expected latitude change");
         assert!(cam.center.longitude.abs() < 1e-9, "longitude should hold");
+    }
+
+    /// The camera centre projects to the middle of the viewport.
+    #[test]
+    fn test_project_centre() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let cam = Camera::new(Coordinate::new(51.5, -0.1), 14.0);
+        let (x, y) = cam.project(&cam.center, &vp);
+        assert!((x - 540.0).abs() < 1e-9);
+        assert!((y - 1140.0).abs() < 1e-9);
+    }
+
+    /// A projected point must land where the tile drawing it lands.
+    #[test]
+    fn test_project_agrees_with_tile_placement() {
+        use crate::renderer::visible_tiles;
+
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        let tiles = visible_tiles(&cam, &vp);
+        let zoom = cam.tile_zoom_for(&vp);
+        let n = 2u32.pow(u32::from(zoom));
+
+        for t in &tiles {
+            // north-west corner of the tile, as a coordinate
+            let world = 256.0 * n as f64;
+            let lon = world_x_to_lon(t.coord.x as f64 * 256.0, world);
+            let lat = world_y_to_lat(t.coord.y as f64 * 256.0, world);
+            let (x, y) = cam.project(&Coordinate::new(lat, lon), &vp);
+            assert!(
+                (x - t.screen_x as f64).abs() < 0.01,
+                "x {x} vs {}",
+                t.screen_x
+            );
+            assert!(
+                (y - t.screen_y as f64).abs() < 0.01,
+                "y {y} vs {}",
+                t.screen_y
+            );
+        }
+    }
+
+    /// Moving east projects right, moving north projects up.
+    #[test]
+    fn test_project_directions() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        let (east_x, _) = cam.project(&Coordinate::new(51.5, -0.09), &vp);
+        let (_, north_y) = cam.project(&Coordinate::new(51.51, -0.1), &vp);
+        assert!(east_x > 400.0);
+        assert!(north_y < 300.0);
+    }
+
+    /// A point just across the antimeridian is a few pixels away, not a world away.
+    #[test]
+    fn test_project_wraps_across_antimeridian() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let cam = Camera::new(Coordinate::new(0.0, 179.99), 10.0);
+        let (x, _) = cam.project(&Coordinate::new(0.0, -179.99), &vp);
+        assert!(x > 400.0 && x < 500.0, "x {x}");
+    }
+
+    #[test]
+    fn test_metres_per_pixel() {
+        // one 256 px tile spans the equator at zoom 0
+        let vp = Viewport::new(800, 600, 1.0);
+        let equator = Camera::new(Coordinate::new(0.0, 0.0), 0.0);
+        assert!((equator.metres_per_pixel(&vp) - 156_543.03).abs() < 0.1);
+
+        // halves with each zoom level
+        let deeper = Camera::new(Coordinate::new(0.0, 0.0), 1.0);
+        assert!((deeper.metres_per_pixel(&vp) * 2.0 - equator.metres_per_pixel(&vp)).abs() < 1e-6);
+
+        // and shrinks with the cosine of latitude
+        let london = Camera::new(Coordinate::new(51.5, 0.0), 0.0);
+        let ratio = london.metres_per_pixel(&vp) / equator.metres_per_pixel(&vp);
+        assert!((ratio - 51.5_f64.to_radians().cos()).abs() < 1e-9);
+
+        // a denser screen packs more pixels into the same ground
+        let dense = Viewport::new(800, 600, 2.0);
+        assert!(
+            (equator.metres_per_pixel(&dense) * 2.0 - equator.metres_per_pixel(&vp)).abs() < 1e-6
+        );
     }
 
     #[test]

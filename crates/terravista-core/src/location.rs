@@ -68,6 +68,24 @@ pub enum TrackingMode {
     FollowWithCourse,
 }
 
+impl TrackingMode {
+    /// Whether the camera centre should track the user.
+    pub fn follows(self) -> bool {
+        !matches!(self, TrackingMode::None)
+    }
+
+    /// Whether the map should rotate to the location's bearing.
+    ///
+    /// Heading and course differ in where the bearing comes from, not in what
+    /// the camera does, so the platform layer picks which one it feeds in.
+    pub fn rotates(self) -> bool {
+        matches!(
+            self,
+            TrackingMode::FollowWithHeading | TrackingMode::FollowWithCourse
+        )
+    }
+}
+
 /// Location service abstraction (implemented by platform layer).
 pub trait LocationProvider {
     fn last_location(&self) -> Option<Location>;
@@ -88,6 +106,21 @@ mod tests {
         let dist = london.distance_to(&paris);
         // ~340 km
         assert!(dist > 330_000.0 && dist < 350_000.0);
+    }
+
+    #[test]
+    fn test_tracking_modes() {
+        assert!(!TrackingMode::None.follows());
+        assert!(!TrackingMode::None.rotates());
+        assert!(TrackingMode::Follow.follows());
+        assert!(!TrackingMode::Follow.rotates());
+        for mode in [
+            TrackingMode::FollowWithHeading,
+            TrackingMode::FollowWithCourse,
+        ] {
+            assert!(mode.follows(), "{mode:?}");
+            assert!(mode.rotates(), "{mode:?}");
+        }
     }
 
     #[test]

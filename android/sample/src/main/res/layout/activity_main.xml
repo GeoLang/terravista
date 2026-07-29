@@ -32,4 +32,12 @@
         android:layout_margin="16dp"
         android:text="@string/switch_basemap" />
 
+    <Button
+        android:id="@+id/navigate"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="16dp"
+        android:text="@string/navigate" />
+
 </FrameLayout>

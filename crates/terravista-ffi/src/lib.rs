@@ -18,8 +18,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use terravista_core::camera::{Camera, TileCoord, Viewport};
 use terravista_core::gesture::{GestureRecognizer, GestureResult, TouchEvent, TouchPoint};
-use terravista_core::location::Coordinate;
+use terravista_core::location::{Coordinate, TrackingMode};
 use terravista_core::renderer::{TilePlacement, visible_tiles};
+use terravista_core::route::{Maneuver, NavStatus, NavigationUpdate, Navigator, Route, RouteStep};
 use terravista_core::tile_cache::{CacheConfig, TileCache, TileData, TileMeta};
 
 /// Opaque map state handle.
@@ -30,6 +31,11 @@ pub struct TvMapState {
     tile_cache: TileCache,
     /// Filled by `tv_map_visible_tile_count`, read by `tv_map_visible_tile_at`.
     placements: Vec<TilePlacement>,
+    tracking: TrackingMode,
+    user_location: Option<TvUserLocation>,
+    navigator: Option<Navigator>,
+    /// Last result of `tv_nav_update`, read back by `tv_nav_progress`.
+    nav_last: Option<NavigationUpdate>,
 }
 
 // ─── Map State ───────────────────────────────────────────────────────────────
@@ -47,6 +53,10 @@ pub extern "C" fn tv_map_create(
         gesture: GestureRecognizer::new(),
         tile_cache: TileCache::new(CacheConfig::default()),
         placements: Vec::new(),
+        tracking: TrackingMode::None,
+        user_location: None,
+        navigator: None,
+        nav_last: None,
     });
     Box::into_raw(state)
 }
@@ -526,7 +536,410 @@ pub unsafe extern "C" fn tv_cache_clear(state: *mut TvMapState) {
     }
 }
 
+// ─── Projection ──────────────────────────────────────────────────────────────
+
+/// A point on screen, in device pixels from the viewport's top-left corner.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvScreenPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Project a coordinate to its screen position, north-up like the tile
+/// placements from `tv_map_visible_tile_at`.
+///
+/// Returns false if a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_project(
+    state: *const TvMapState,
+    latitude: f64,
+    longitude: f64,
+    out: *mut TvScreenPoint,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let (x, y) = s
+        .camera
+        .project(&Coordinate::new(latitude, longitude), &s.viewport);
+    *out = TvScreenPoint {
+        x: x as f32,
+        y: y as f32,
+    };
+    true
+}
+
+/// Ground metres covered by one device pixel at the current camera.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_metres_per_pixel(state: *const TvMapState) -> f64 {
+    unsafe { state.as_ref() }.map_or(0.0, |s| s.camera.metres_per_pixel(&s.viewport))
+}
+
+// ─── User Location ───────────────────────────────────────────────────────────
+
+/// The last location handed to `tv_map_set_user_location`.
+///
+/// `accuracy_m` is a horizontal radius; it is negative when unknown.
+/// `bearing_deg` is NaN when unknown.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvUserLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_m: f64,
+    pub bearing_deg: f64,
+}
+
+/// Tracking mode for `tv_map_set_tracking_mode`.
+pub const TV_TRACKING_NONE: i32 = 0;
+pub const TV_TRACKING_FOLLOW: i32 = 1;
+/// Follow and rotate the map to the compass heading fed in as the bearing.
+pub const TV_TRACKING_FOLLOW_WITH_HEADING: i32 = 2;
+/// Follow and rotate the map to the direction of travel fed in as the bearing.
+pub const TV_TRACKING_FOLLOW_WITH_COURSE: i32 = 3;
+
+fn tracking_from_code(code: i32) -> Option<TrackingMode> {
+    match code {
+        TV_TRACKING_NONE => Some(TrackingMode::None),
+        TV_TRACKING_FOLLOW => Some(TrackingMode::Follow),
+        TV_TRACKING_FOLLOW_WITH_HEADING => Some(TrackingMode::FollowWithHeading),
+        TV_TRACKING_FOLLOW_WITH_COURSE => Some(TrackingMode::FollowWithCourse),
+        _ => None,
+    }
+}
+
+fn tracking_code(mode: TrackingMode) -> i32 {
+    match mode {
+        TrackingMode::None => TV_TRACKING_NONE,
+        TrackingMode::Follow => TV_TRACKING_FOLLOW,
+        TrackingMode::FollowWithHeading => TV_TRACKING_FOLLOW_WITH_HEADING,
+        TrackingMode::FollowWithCourse => TV_TRACKING_FOLLOW_WITH_COURSE,
+    }
+}
+
+/// Move the camera onto the stored user location, as the tracking mode asks.
+fn apply_tracking(state: &mut TvMapState) {
+    let Some(loc) = state.user_location else {
+        return;
+    };
+    if state.tracking.follows() {
+        state.camera.center = Coordinate::new(loc.latitude, loc.longitude);
+    }
+    if state.tracking.rotates() && loc.bearing_deg.is_finite() {
+        state.camera.bearing = loc.bearing_deg % 360.0;
+    }
+}
+
+/// Set the user's location, for drawing and for camera tracking.
+///
+/// Pass a negative `accuracy_m` or a NaN `bearing_deg` when unknown. The SDK
+/// never reads a platform location provider; the host supplies every fix.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_set_user_location(
+    state: *mut TvMapState,
+    latitude: f64,
+    longitude: f64,
+    accuracy_m: f64,
+    bearing_deg: f64,
+) -> bool {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return false;
+    };
+    if !latitude.is_finite() || !longitude.is_finite() {
+        return false;
+    }
+    s.user_location = Some(TvUserLocation {
+        latitude,
+        longitude,
+        accuracy_m,
+        bearing_deg,
+    });
+    apply_tracking(s);
+    true
+}
+
+/// Read back the stored user location.
+///
+/// Returns false if none has been set or a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_user_location(
+    state: *const TvMapState,
+    out: *mut TvUserLocation,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let Some(loc) = s.user_location else {
+        return false;
+    };
+    *out = loc;
+    true
+}
+
+/// Set the camera tracking mode to one of the `TV_TRACKING_*` values.
+///
+/// Snaps the camera onto the stored location straight away, so switching mode
+/// does not wait for the next fix. Returns false for an unknown mode.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_set_tracking_mode(state: *mut TvMapState, mode: i32) -> bool {
+    let (Some(s), Some(mode)) = (unsafe { state.as_mut() }, tracking_from_code(mode)) else {
+        return false;
+    };
+    s.tracking = mode;
+    apply_tracking(s);
+    true
+}
+
+/// Get the current tracking mode as a `TV_TRACKING_*` value.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_get_tracking_mode(state: *const TvMapState) -> i32 {
+    unsafe { state.as_ref() }.map_or(TV_TRACKING_NONE, |s| tracking_code(s.tracking))
+}
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+
+/// One vertex of a route's geometry.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvRoutePoint {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+/// One step of a route, covering the geometry from `start_index` to `end_index`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvRouteStep {
+    /// Instruction text, borrowed for the duration of the call. May be null.
+    pub instruction: *const c_char,
+    pub start_index: u32,
+    pub end_index: u32,
+}
+
+/// Navigation status in `TvNavProgress`.
+pub const TV_NAV_ON_ROUTE: i32 = 0;
+pub const TV_NAV_OFF_ROUTE: i32 = 1;
+pub const TV_NAV_ARRIVED: i32 = 2;
+
+/// Progress along the current route.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvNavProgress {
+    /// One of the `TV_NAV_*` values.
+    pub status: i32,
+    pub step_index: u32,
+    pub step_count: u32,
+    pub distance_to_next_step_m: f64,
+    pub distance_remaining_m: f64,
+    pub off_route: bool,
+}
+
+fn nav_status_code(status: NavStatus) -> i32 {
+    match status {
+        NavStatus::OnRoute => TV_NAV_ON_ROUTE,
+        NavStatus::OffRoute => TV_NAV_OFF_ROUTE,
+        NavStatus::Arrived => TV_NAV_ARRIVED,
+    }
+}
+
+fn nav_progress(update: &NavigationUpdate, step_count: usize) -> TvNavProgress {
+    TvNavProgress {
+        status: nav_status_code(update.status),
+        step_index: update.current_step as u32,
+        step_count: step_count as u32,
+        distance_to_next_step_m: update.distance_to_next_step,
+        distance_remaining_m: update.distance_remaining,
+        off_route: update.status == NavStatus::OffRoute,
+    }
+}
+
+/// Set the route to navigate, replacing any current one.
+///
+/// Routes come from a router (itinera server-side, say); this SDK follows one,
+/// it does not compute one. Needs at least two points and one step. Step
+/// indices are clamped into the geometry. Returns false on invalid input,
+/// leaving the previous route in place.
+///
+/// # Safety
+/// `points` must hold `point_count` elements and `steps` must hold `step_count`
+/// elements. Each step's `instruction` must be a valid C string or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_nav_set_route(
+    state: *mut TvMapState,
+    points: *const TvRoutePoint,
+    point_count: usize,
+    steps: *const TvRouteStep,
+    step_count: usize,
+) -> bool {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return false;
+    };
+    if points.is_null() || steps.is_null() || point_count < 2 || step_count == 0 {
+        return false;
+    }
+
+    let geometry: Vec<Coordinate> = unsafe { std::slice::from_raw_parts(points, point_count) }
+        .iter()
+        .map(|p| Coordinate::new(p.latitude, p.longitude))
+        .collect();
+    if geometry
+        .iter()
+        .any(|c| !c.latitude.is_finite() || !c.longitude.is_finite())
+    {
+        return false;
+    }
+
+    let last = geometry.len() - 1;
+    let route_steps: Vec<RouteStep> = unsafe { std::slice::from_raw_parts(steps, step_count) }
+        .iter()
+        .map(|step| {
+            let instruction = if step.instruction.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(step.instruction) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let start = (step.start_index as usize).min(last);
+            RouteStep {
+                instruction,
+                // the C ABI carries instruction text only; nothing in the
+                // progress maths reads the maneuver
+                maneuver: Maneuver::Straight,
+                distance_m: 0.0,
+                duration_s: 0.0,
+                start_index: start,
+                end_index: (step.end_index as usize).clamp(start, last),
+            }
+        })
+        .collect();
+
+    let distance_m = geometry
+        .windows(2)
+        .map(|pair| pair[0].distance_to(&pair[1]))
+        .sum();
+
+    s.navigator = Some(Navigator::new(Route {
+        geometry,
+        distance_m,
+        duration_s: 0.0,
+        steps: route_steps,
+    }));
+    s.nav_last = None;
+    true
+}
+
+/// Advance navigation with a new location and write the progress into `out`.
+///
+/// Returns false if no route is set or a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_nav_update(
+    state: *mut TvMapState,
+    latitude: f64,
+    longitude: f64,
+    out: *mut TvNavProgress,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_mut() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let Some(nav) = s.navigator.as_mut() else {
+        return false;
+    };
+    let update = nav.update(&Coordinate::new(latitude, longitude));
+    *out = nav_progress(&update, nav.route().steps.len());
+    s.nav_last = Some(update);
+    true
+}
+
+/// Write the progress from the last `tv_nav_update` into `out`.
+///
+/// Returns false before the first update, or if a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_nav_progress(
+    state: *const TvMapState,
+    out: *mut TvNavProgress,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let (Some(update), Some(nav)) = (s.nav_last.as_ref(), s.navigator.as_ref()) else {
+        return false;
+    };
+    *out = nav_progress(update, nav.route().steps.len());
+    true
+}
+
+/// Instruction text from the last `tv_nav_update`.
+///
+/// Returns a string the caller must free with `tv_string_free`, or null before
+/// the first update.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_nav_instruction(state: *const TvMapState) -> *mut c_char {
+    let Some(s) = (unsafe { state.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    let Some(update) = s.nav_last.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    match CString::new(update.instruction.as_str()) {
+        Ok(c) => c.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Drop the current route and its progress.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_nav_clear(state: *mut TvMapState) {
+    if let Some(s) = unsafe { state.as_mut() } {
+        s.navigator = None;
+        s.nav_last = None;
+    }
+}
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
+
+/// Great-circle distance between two coordinates, in metres.
+#[unsafe(no_mangle)]
+pub extern "C" fn tv_distance_between(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    Coordinate::new(lat1, lon1).distance_to(&Coordinate::new(lat2, lon2))
+}
+
+/// Initial bearing from the first coordinate to the second, in degrees from north.
+#[unsafe(no_mangle)]
+pub extern "C" fn tv_bearing_between(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    Coordinate::new(lat1, lon1).bearing_to(&Coordinate::new(lat2, lon2))
+}
 
 /// Free a string allocated by the SDK.
 ///
@@ -544,4 +957,321 @@ pub unsafe extern "C" fn tv_string_free(ptr: *mut c_char) {
 pub extern "C" fn tv_version() -> *mut c_char {
     let version = CString::new(env!("CARGO_PKG_VERSION")).unwrap();
     version.into_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A map centred on the start of [`ROUTE`], zoomed in enough to navigate.
+    fn map() -> *mut TvMapState {
+        let state = tv_map_create(1080, 2280, 3.0);
+        unsafe {
+            tv_map_set_center(state, ROUTE[0].0, ROUTE[0].1);
+            tv_map_set_zoom(state, 16.0);
+        }
+        state
+    }
+
+    /// Four vertices heading north up a street, then east.
+    const ROUTE: [(f64, f64); 4] = [
+        (51.5000, -0.1000),
+        (51.5010, -0.1000),
+        (51.5020, -0.1000),
+        (51.5020, -0.0980),
+    ];
+
+    fn points() -> Vec<TvRoutePoint> {
+        ROUTE
+            .iter()
+            .map(|(lat, lon)| TvRoutePoint {
+                latitude: *lat,
+                longitude: *lon,
+            })
+            .collect()
+    }
+
+    /// Set a two-step route on `state`, keeping the instruction strings alive
+    /// only for the call, which is all the ABI promises.
+    fn set_route(state: *mut TvMapState) -> bool {
+        let pts = points();
+        let head = CString::new("Head north").unwrap();
+        let turn = CString::new("Turn right").unwrap();
+        let steps = [
+            TvRouteStep {
+                instruction: head.as_ptr(),
+                start_index: 0,
+                end_index: 2,
+            },
+            TvRouteStep {
+                instruction: turn.as_ptr(),
+                start_index: 2,
+                end_index: 3,
+            },
+        ];
+        unsafe { tv_nav_set_route(state, pts.as_ptr(), pts.len(), steps.as_ptr(), steps.len()) }
+    }
+
+    fn take_string(ptr: *mut c_char) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        let s = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { tv_string_free(ptr) };
+        Some(s)
+    }
+
+    fn progress(state: *mut TvMapState, lat: f64, lon: f64) -> TvNavProgress {
+        let mut out = TvNavProgress {
+            status: -1,
+            step_index: 0,
+            step_count: 0,
+            distance_to_next_step_m: 0.0,
+            distance_remaining_m: 0.0,
+            off_route: false,
+        };
+        assert!(unsafe { tv_nav_update(state, lat, lon, &mut out) });
+        out
+    }
+
+    #[test]
+    fn test_project_centre_and_nulls() {
+        let state = map();
+        let mut p = TvScreenPoint { x: 0.0, y: 0.0 };
+        assert!(unsafe { tv_map_project(state, ROUTE[0].0, ROUTE[0].1, &mut p) });
+        assert!((p.x - 540.0).abs() < 0.01);
+        assert!((p.y - 1140.0).abs() < 0.01);
+
+        // north of the centre draws above it
+        assert!(unsafe { tv_map_project(state, ROUTE[2].0, ROUTE[2].1, &mut p) });
+        assert!(p.y < 1140.0);
+
+        assert!(!unsafe { tv_map_project(std::ptr::null(), 0.0, 0.0, &mut p) });
+        assert!(!unsafe { tv_map_project(state, 0.0, 0.0, std::ptr::null_mut()) });
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_metres_per_pixel_halves_per_zoom() {
+        let state = map();
+        let at16 = unsafe { tv_map_metres_per_pixel(state) };
+        unsafe { tv_map_set_zoom(state, 17.0) };
+        let at17 = unsafe { tv_map_metres_per_pixel(state) };
+        assert!(at16 > 0.0);
+        assert!((at17 * 2.0 - at16).abs() < 1e-9);
+        assert_eq!(unsafe { tv_map_metres_per_pixel(std::ptr::null()) }, 0.0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_user_location_roundtrip() {
+        let state = map();
+        let mut out = TvUserLocation {
+            latitude: 0.0,
+            longitude: 0.0,
+            accuracy_m: 0.0,
+            bearing_deg: 0.0,
+        };
+        // nothing set yet
+        assert!(!unsafe { tv_map_user_location(state, &mut out) });
+
+        assert!(unsafe { tv_map_set_user_location(state, 51.5, -0.1, 12.5, 90.0) });
+        assert!(unsafe { tv_map_user_location(state, &mut out) });
+        assert_eq!(out.latitude, 51.5);
+        assert_eq!(out.longitude, -0.1);
+        assert_eq!(out.accuracy_m, 12.5);
+        assert_eq!(out.bearing_deg, 90.0);
+
+        // a fix with no accuracy or bearing is still a fix
+        assert!(unsafe { tv_map_set_user_location(state, 51.6, -0.2, -1.0, f64::NAN) });
+        assert!(unsafe { tv_map_user_location(state, &mut out) });
+        assert!(out.accuracy_m < 0.0 && out.bearing_deg.is_nan());
+
+        assert!(!unsafe { tv_map_set_user_location(state, f64::NAN, -0.1, -1.0, f64::NAN) });
+        assert!(!unsafe { tv_map_set_user_location(std::ptr::null_mut(), 1.0, 1.0, -1.0, 0.0) });
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_tracking_moves_the_camera() {
+        let state = map();
+        assert_eq!(unsafe { tv_map_get_tracking_mode(state) }, TV_TRACKING_NONE);
+
+        // untracked, a fix leaves the camera alone
+        unsafe { tv_map_set_user_location(state, 51.6, -0.2, -1.0, 45.0) };
+        assert_eq!(unsafe { tv_map_get_center_lat(state) }, ROUTE[0].0);
+
+        // switching to follow snaps onto the fix already held
+        assert!(unsafe { tv_map_set_tracking_mode(state, TV_TRACKING_FOLLOW) });
+        assert_eq!(unsafe { tv_map_get_center_lat(state) }, 51.6);
+        assert_eq!(unsafe { tv_map_get_bearing(state) }, 0.0);
+
+        // and later fixes keep pulling it along
+        unsafe { tv_map_set_user_location(state, 51.7, -0.3, -1.0, 45.0) };
+        assert_eq!(unsafe { tv_map_get_center_lat(state) }, 51.7);
+
+        // heading mode also rotates, course mode likewise
+        for mode in [
+            TV_TRACKING_FOLLOW_WITH_HEADING,
+            TV_TRACKING_FOLLOW_WITH_COURSE,
+        ] {
+            unsafe { tv_map_set_bearing(state, 0.0) };
+            assert!(unsafe { tv_map_set_tracking_mode(state, mode) });
+            assert_eq!(unsafe { tv_map_get_tracking_mode(state) }, mode);
+            assert_eq!(unsafe { tv_map_get_bearing(state) }, 45.0);
+        }
+
+        // an unknown bearing must not spin the map
+        unsafe { tv_map_set_user_location(state, 51.8, -0.4, -1.0, f64::NAN) };
+        assert_eq!(unsafe { tv_map_get_bearing(state) }, 45.0);
+
+        assert!(!unsafe { tv_map_set_tracking_mode(state, 99) });
+        assert_eq!(
+            unsafe { tv_map_get_tracking_mode(state) },
+            TV_TRACKING_FOLLOW_WITH_COURSE
+        );
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_set_route_rejects_bad_input() {
+        let state = map();
+        let pts = points();
+        let steps = [TvRouteStep {
+            instruction: std::ptr::null(),
+            start_index: 0,
+            end_index: 3,
+        }];
+
+        // too few points, no steps, null arrays
+        assert!(!unsafe { tv_nav_set_route(state, pts.as_ptr(), 1, steps.as_ptr(), 1) });
+        assert!(!unsafe { tv_nav_set_route(state, pts.as_ptr(), pts.len(), steps.as_ptr(), 0) });
+        assert!(!unsafe { tv_nav_set_route(state, std::ptr::null(), 2, steps.as_ptr(), 1) });
+        assert!(!unsafe { tv_nav_set_route(state, pts.as_ptr(), pts.len(), std::ptr::null(), 1) });
+
+        // a null instruction is allowed, and rejected input left no route behind
+        let mut out = TvNavProgress {
+            status: -1,
+            step_index: 0,
+            step_count: 0,
+            distance_to_next_step_m: 0.0,
+            distance_remaining_m: 0.0,
+            off_route: false,
+        };
+        assert!(!unsafe { tv_nav_update(state, ROUTE[0].0, ROUTE[0].1, &mut out) });
+        assert!(unsafe { tv_nav_set_route(state, pts.as_ptr(), pts.len(), steps.as_ptr(), 1) });
+        assert!(unsafe { tv_nav_update(state, ROUTE[0].0, ROUTE[0].1, &mut out) });
+        assert_eq!(
+            take_string(unsafe { tv_nav_instruction(state) }).as_deref(),
+            Some("")
+        );
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// Out-of-range step indices must clamp instead of panicking the update.
+    #[test]
+    fn test_set_route_clamps_step_indices() {
+        let state = map();
+        let pts = points();
+        let steps = [TvRouteStep {
+            instruction: std::ptr::null(),
+            start_index: 900,
+            end_index: 3,
+        }];
+        assert!(unsafe { tv_nav_set_route(state, pts.as_ptr(), pts.len(), steps.as_ptr(), 1) });
+        let p = progress(state, ROUTE[0].0, ROUTE[0].1);
+        assert_eq!(p.step_index, 0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_navigation_progresses_along_the_route() {
+        let state = map();
+        assert!(set_route(state));
+
+        let start = progress(state, ROUTE[0].0, ROUTE[0].1);
+        assert_eq!(start.status, TV_NAV_ON_ROUTE);
+        assert_eq!(start.step_index, 0);
+        assert_eq!(start.step_count, 2);
+        assert!(!start.off_route);
+        assert!(start.distance_remaining_m > 300.0);
+        assert!(start.distance_to_next_step_m > 200.0);
+        assert_eq!(
+            take_string(unsafe { tv_nav_instruction(state) }).as_deref(),
+            Some("Head north")
+        );
+
+        // halfway up the first step: closer to the turn, less left overall
+        let mid = progress(state, ROUTE[1].0, ROUTE[1].1);
+        assert_eq!(mid.step_index, 0);
+        assert!(mid.distance_to_next_step_m < start.distance_to_next_step_m);
+        assert!(mid.distance_remaining_m < start.distance_remaining_m);
+
+        // past the turn the step advances and the instruction follows
+        let turn = progress(state, ROUTE[2].0, ROUTE[2].1);
+        assert_eq!(turn.step_index, 1);
+        assert_eq!(
+            take_string(unsafe { tv_nav_instruction(state) }).as_deref(),
+            Some("Turn right")
+        );
+
+        let end = progress(state, ROUTE[3].0, ROUTE[3].1);
+        assert_eq!(end.status, TV_NAV_ARRIVED);
+        assert!(end.distance_remaining_m < 20.0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_navigation_reports_off_route() {
+        let state = map();
+        assert!(set_route(state));
+        let p = progress(state, 51.5000, -0.2000);
+        assert_eq!(p.status, TV_NAV_OFF_ROUTE);
+        assert!(p.off_route);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_progress_read_back_and_cleared() {
+        let state = map();
+        let mut out = TvNavProgress {
+            status: -1,
+            step_index: 0,
+            step_count: 0,
+            distance_to_next_step_m: 0.0,
+            distance_remaining_m: 0.0,
+            off_route: false,
+        };
+        assert!(set_route(state));
+
+        // nothing to read before the first update
+        assert!(!unsafe { tv_nav_progress(state, &mut out) });
+        assert!(unsafe { tv_nav_instruction(state) }.is_null());
+
+        let live = progress(state, ROUTE[1].0, ROUTE[1].1);
+        assert!(unsafe { tv_nav_progress(state, &mut out) });
+        assert_eq!(out.step_index, live.step_index);
+        assert_eq!(out.distance_remaining_m, live.distance_remaining_m);
+
+        unsafe { tv_nav_clear(state) };
+        assert!(!unsafe { tv_nav_progress(state, &mut out) });
+        assert!(!unsafe { tv_nav_update(state, ROUTE[1].0, ROUTE[1].1, &mut out) });
+        assert!(unsafe { tv_nav_instruction(state) }.is_null());
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_distance_and_bearing() {
+        // London to Paris, roughly 340 km on a south-east heading
+        let d = tv_distance_between(51.5074, -0.1278, 48.8566, 2.3522);
+        assert!(d > 330_000.0 && d < 350_000.0);
+        let b = tv_bearing_between(51.5074, -0.1278, 48.8566, 2.3522);
+        assert!(b > 90.0 && b < 180.0, "bearing {b}");
+
+        assert_eq!(tv_distance_between(51.5, -0.1, 51.5, -0.1), 0.0);
+        // due north
+        assert!(tv_bearing_between(0.0, 0.0, 1.0, 0.0).abs() < 1e-9);
+    }
 }

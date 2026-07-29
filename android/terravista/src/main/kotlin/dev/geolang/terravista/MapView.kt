@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
@@ -70,6 +71,19 @@ class MapView @JvmOverloads constructor(
     private val xys = FloatArray(3)
     private val dst = RectF()
     private val src = Rect()
+    private val locationOut = DoubleArray(4)
+    private val pointXY = FloatArray(2)
+    private val navCounts = IntArray(3)
+    private val navDistances = DoubleArray(2)
+
+    private val accuracyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(38, 66, 133, 244)
+    }
+    private val dotRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(66, 133, 244)
+    }
+    private val headingPath = Path()
 
     // ── Public API ───────────────────────────────────────────────────────────
 
@@ -140,6 +154,116 @@ class MapView @JvmOverloads constructor(
         }
         onCameraMoved()
     }
+
+    // ── Location & navigation ────────────────────────────────────────────────
+
+    /** How the camera follows location fixes. Switching snaps onto the last fix. */
+    var trackingMode: TrackingMode
+        get() = synchronized(sdk) {
+            if (handle == 0L) {
+                TrackingMode.NONE
+            } else {
+                TrackingMode.fromCode(TerraVistaNative.getTrackingMode(handle))
+            }
+        }
+        set(value) {
+            synchronized(sdk) {
+                if (handle == 0L) return@synchronized
+                TerraVistaNative.setTrackingMode(handle, value.code)
+            }
+            onCameraMoved()
+        }
+
+    /**
+     * Feed a location fix, for the position dot and for camera tracking.
+     *
+     * The SDK never reads a platform location provider; the app owns the
+     * permission and the provider and hands each fix in. Pass a negative
+     * [accuracyMetres] or a NaN [bearingDegrees] when unknown.
+     */
+    fun setUserLocation(
+        latitude: Double,
+        longitude: Double,
+        accuracyMetres: Double = -1.0,
+        bearingDegrees: Double = Double.NaN,
+    ) {
+        val follows = synchronized(sdk) {
+            if (handle == 0L) return
+            TerraVistaNative.setUserLocation(handle, latitude, longitude, accuracyMetres, bearingDegrees)
+            TerraVistaNative.getTrackingMode(handle) != TerraVistaNative.TRACKING_NONE
+        }
+        if (follows) onCameraMoved() else invalidate()
+    }
+
+    /**
+     * Start following [route], replacing any current one.
+     *
+     * Returns false and keeps the previous route when [route] has fewer than
+     * two points or no steps. Feed fixes to [updateNavigation] for progress.
+     */
+    fun startNavigation(route: Route): Boolean {
+        val lats = DoubleArray(route.points.size)
+        val lons = DoubleArray(route.points.size)
+        route.points.forEachIndexed { i, p ->
+            lats[i] = p.latitude
+            lons[i] = p.longitude
+        }
+        val starts = IntArray(route.steps.size)
+        val ends = IntArray(route.steps.size)
+        val instructions = arrayOfNulls<String>(route.steps.size)
+        route.steps.forEachIndexed { i, s ->
+            starts[i] = s.startIndex
+            ends[i] = s.endIndex
+            instructions[i] = s.instruction
+        }
+        return synchronized(sdk) {
+            handle != 0L && TerraVistaNative.navSetRoute(handle, lats, lons, starts, ends, instructions)
+        }
+    }
+
+    /**
+     * Advance navigation with a location fix.
+     *
+     * Independent of [setUserLocation]: feed each fix to both when a dot and
+     * navigation are both wanted. Returns null when no route is set.
+     */
+    fun updateNavigation(latitude: Double, longitude: Double): NavProgress? =
+        synchronized(sdk) {
+            if (handle == 0L ||
+                !TerraVistaNative.navUpdate(handle, latitude, longitude, navCounts, navDistances)
+            ) {
+                return null
+            }
+            readProgressLocked()
+        }
+
+    /** Progress from the last [updateNavigation], or null before the first fix. */
+    val navigationProgress: NavProgress?
+        get() = synchronized(sdk) {
+            if (handle == 0L || !TerraVistaNative.navProgress(handle, navCounts, navDistances)) {
+                return null
+            }
+            readProgressLocked()
+        }
+
+    /** Drop the current route and its progress. */
+    fun stopNavigation() {
+        synchronized(sdk) {
+            if (handle == 0L) return
+            TerraVistaNative.navClear(handle)
+        }
+    }
+
+    /** Caller must hold [sdk] and have filled [navCounts] and [navDistances]. */
+    private fun readProgressLocked(): NavProgress =
+        NavProgress(
+            status = NavStatus.fromCode(navCounts[0]),
+            stepIndex = navCounts[1],
+            stepCount = navCounts[2],
+            distanceToNextStepMetres = navDistances[0],
+            distanceRemainingMetres = navDistances[1],
+            instruction = TerraVistaNative.navInstruction(handle) ?: "",
+        )
 
     /** Free the native map. Idempotent, and the view draws nothing afterwards. */
     fun destroy() {
@@ -295,7 +419,51 @@ class MapView @JvmOverloads constructor(
             }
         }
 
+        drawUserLocation(canvas)
+
         canvas.restore()
+    }
+
+    /** Draws in the same north-up frame as the tiles, so the canvas rotation applies. */
+    private fun drawUserLocation(canvas: Canvas) {
+        var metresPerPixel = 0.0
+        val visible = synchronized(sdk) {
+            if (handle == 0L || !TerraVistaNative.userLocation(handle, locationOut)) {
+                return@synchronized false
+            }
+            if (!TerraVistaNative.project(handle, locationOut[0], locationOut[1], pointXY)) {
+                return@synchronized false
+            }
+            metresPerPixel = TerraVistaNative.metresPerPixel(handle)
+            true
+        }
+        if (!visible) return
+
+        val x = pointXY[0]
+        val y = pointXY[1]
+        val dotRadius = 7f * density
+
+        val accuracy = locationOut[2]
+        if (accuracy > 0 && metresPerPixel > 0) {
+            val radius = (accuracy / metresPerPixel).toFloat()
+            if (radius > dotRadius) canvas.drawCircle(x, y, radius, accuracyPaint)
+        }
+
+        val bearing = locationOut[3]
+        if (!bearing.isNaN()) {
+            headingPath.rewind()
+            headingPath.moveTo(x, y - 2.6f * dotRadius)
+            headingPath.lineTo(x - 1.1f * dotRadius, y - 1.1f * dotRadius)
+            headingPath.lineTo(x + 1.1f * dotRadius, y - 1.1f * dotRadius)
+            headingPath.close()
+            canvas.save()
+            canvas.rotate(bearing.toFloat(), x, y)
+            canvas.drawPath(headingPath, dotPaint)
+            canvas.restore()
+        }
+
+        canvas.drawCircle(x, y, dotRadius + 2f * density, dotRingPaint)
+        canvas.drawCircle(x, y, dotRadius, dotPaint)
     }
 
     /**

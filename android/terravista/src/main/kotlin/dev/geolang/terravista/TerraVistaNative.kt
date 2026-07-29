@@ -18,6 +18,17 @@ internal object TerraVistaNative {
     const val TOUCH_END = 2
     const val TOUCH_CANCEL = 3
 
+    // tracking modes, must match TV_TRACKING_* in terravista-ffi
+    const val TRACKING_NONE = 0
+    const val TRACKING_FOLLOW = 1
+    const val TRACKING_FOLLOW_WITH_HEADING = 2
+    const val TRACKING_FOLLOW_WITH_COURSE = 3
+
+    // navigation statuses, must match TV_NAV_* in terravista-ffi
+    const val NAV_ON_ROUTE = 0
+    const val NAV_OFF_ROUTE = 1
+    const val NAV_ARRIVED = 2
+
     @JvmStatic external fun create(width: Int, height: Int, dpr: Float): Long
     @JvmStatic external fun destroy(handle: Long)
 
@@ -62,6 +73,55 @@ internal object TerraVistaNative {
 
     @JvmStatic external fun cacheGet(handle: Long, z: Int, x: Int, y: Int): ByteArray?
     @JvmStatic external fun cacheClear(handle: Long)
+
+    /** `xy` receives screenX, screenY in device pixels, north-up like tile placements. */
+    @JvmStatic external fun project(
+        handle: Long,
+        latitude: Double,
+        longitude: Double,
+        xy: FloatArray,
+    ): Boolean
+
+    @JvmStatic external fun metresPerPixel(handle: Long): Double
+
+    @JvmStatic external fun setUserLocation(
+        handle: Long,
+        latitude: Double,
+        longitude: Double,
+        accuracyMetres: Double,
+        bearingDegrees: Double,
+    ): Boolean
+
+    /** `out` receives latitude, longitude, accuracyMetres, bearingDegrees. */
+    @JvmStatic external fun userLocation(handle: Long, out: DoubleArray): Boolean
+
+    @JvmStatic external fun setTrackingMode(handle: Long, mode: Int): Boolean
+    @JvmStatic external fun getTrackingMode(handle: Long): Int
+
+    @JvmStatic external fun navSetRoute(
+        handle: Long,
+        lats: DoubleArray,
+        lons: DoubleArray,
+        stepStart: IntArray,
+        stepEnd: IntArray,
+        instructions: Array<String?>,
+    ): Boolean
+
+    /** `counts` receives status, stepIndex, stepCount; `distances` receives metres to next step and remaining. */
+    @JvmStatic external fun navUpdate(
+        handle: Long,
+        latitude: Double,
+        longitude: Double,
+        counts: IntArray,
+        distances: DoubleArray,
+    ): Boolean
+
+    @JvmStatic external fun navProgress(handle: Long, counts: IntArray, distances: DoubleArray): Boolean
+    @JvmStatic external fun navInstruction(handle: Long): String?
+    @JvmStatic external fun navClear(handle: Long)
+
+    @JvmStatic external fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double
+    @JvmStatic external fun bearingBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double
 
     @JvmStatic external fun version(): String?
 }

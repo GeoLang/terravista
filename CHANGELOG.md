@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-29
+
+- Turn-by-turn navigation in the Android SDK: `MapView.startNavigation(Route)`,
+  per-fix progress (`NavProgress` with status, next-step and remaining
+  distances, current instruction).
+- User location: blue dot with accuracy circle and heading wedge, plus
+  `TrackingMode` (follow, follow-with-heading, follow-with-course) so the
+  camera can track fixes.
+- Core: `Camera::project` (coordinate to screen pixels, agrees with tile
+  placement, wraps at the antimeridian) and `metres_per_pixel`.
+- C FFI grown from 28 to 41 symbols: projection, user location, tracking
+  mode, navigation route/update/progress, distance and bearing helpers.
+
 ## [0.2.0] - 2026-07-29
 
 - Camera math rewritten in Web Mercator world-pixel space: pan, visible bounds,
