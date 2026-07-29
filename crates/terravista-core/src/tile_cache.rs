@@ -129,6 +129,16 @@ impl TileCache {
         self.total_size = 0;
     }
 
+    /// Point the cache at a new tile source. Cached tiles are keyed by
+    /// coordinate only, so a different source must drop them or stale
+    /// imagery would serve for the new source.
+    pub fn set_url_template(&mut self, template: String) {
+        if self.config.url_template != template {
+            self.clear();
+        }
+        self.config.url_template = template;
+    }
+
     /// Build a tile URL from the template.
     pub fn tile_url(&self, coord: &TileCoord) -> String {
         self.config

@@ -3,7 +3,7 @@
 //! The mobile SDK renders via the platform's GPU (Metal on iOS, Vulkan on Android).
 //! This module defines the interface between the tile/vector data and the rendering output.
 
-use crate::camera::{Camera, TileCoord, Viewport};
+use crate::camera::{Camera, TileCoord, Viewport, lat_to_world_y, lon_to_world_x};
 
 /// Render command that the platform layer executes.
 #[derive(Debug, Clone)]
@@ -136,48 +136,39 @@ impl Default for FrameBuilder {
 }
 
 /// Calculate which tiles are visible and their screen positions.
+///
+/// Positions and sizes are device pixels, matching `Viewport::width`/`height`.
 pub fn visible_tiles(camera: &Camera, viewport: &Viewport) -> Vec<TilePlacement> {
     let bounds = camera.visible_bounds(viewport);
     let zoom = camera.tile_zoom();
     let range = bounds.tile_range(zoom);
-    let tile_size = 256.0 * viewport.device_pixel_ratio;
 
-    let n = 2u32.pow(zoom as u32) as f64;
-    let scale = 2.0_f64.powf(camera.zoom);
+    let world = camera.world_size(viewport);
+    // one tile's footprint on screen, so fractional zoom scales the tiles
+    let tile_px = world / 2.0_f64.powi(i32::from(zoom));
+    let origin_x = viewport.width as f64 / 2.0 - lon_to_world_x(camera.center.longitude, world);
+    let origin_y = viewport.height as f64 / 2.0 - lat_to_world_y(camera.center.latitude, world);
 
     range
         .iter()
-        .map(|coord| {
-            // Calculate screen position of tile
-            let tile_lon = coord.x as f64 / n * 360.0 - 180.0;
-            let tile_lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * coord.y as f64 / n))
-                .sinh()
-                .atan();
-            let tile_lat = tile_lat_rad.to_degrees();
-
-            let dx = tile_lon - camera.center.longitude;
-            let dy = camera.center.latitude - tile_lat;
-
-            let pixels_per_degree = 256.0 * scale / 360.0;
-            let screen_x = (viewport.logical_width() as f64 / 2.0 + dx * pixels_per_degree) as f32;
-            let screen_y = (viewport.logical_height() as f64 / 2.0 + dy * pixels_per_degree) as f32;
-
-            TilePlacement {
-                coord,
-                screen_x,
-                screen_y,
-                size: tile_size,
-            }
+        .map(|coord| TilePlacement {
+            coord,
+            screen_x: (origin_x + coord.x as f64 * tile_px) as f32,
+            screen_y: (origin_y + coord.y as f64 * tile_px) as f32,
+            size: tile_px as f32,
         })
         .collect()
 }
 
-/// Where to draw a tile on screen.
+/// Where to draw a tile on screen, in device pixels.
 #[derive(Debug, Clone)]
 pub struct TilePlacement {
     pub coord: TileCoord,
+    /// Left edge, device pixels.
     pub screen_x: f32,
+    /// Top edge, device pixels.
     pub screen_y: f32,
+    /// Edge length, device pixels. Tiles are square.
     pub size: f32,
 }
 
@@ -201,5 +192,78 @@ mod tests {
         let viewport = Viewport::new(800, 600, 2.0);
         let tiles = visible_tiles(&camera, &viewport);
         assert!(!tiles.is_empty());
+    }
+
+    /// Neighbouring tiles must sit exactly one tile apart on both axes, in the
+    /// same units as `size`. Latitude 0 hides unit and projection errors, so
+    /// check well off the equator too.
+    #[test]
+    fn test_tile_spacing_is_square_at_every_latitude() {
+        for lat in [0.0, 51.5, -33.9, 71.0] {
+            let camera = Camera::new(Coordinate::new(lat, -0.1), 10.0);
+            let viewport = Viewport::new(1080, 2280, 3.0);
+            let tiles = visible_tiles(&camera, &viewport);
+            assert!(tiles.len() > 1, "lat {lat}");
+            let size = tiles[0].size;
+
+            for t in &tiles {
+                if let Some(right) = tiles
+                    .iter()
+                    .find(|o| o.coord.x == t.coord.x + 1 && o.coord.y == t.coord.y)
+                {
+                    let dx = right.screen_x - t.screen_x;
+                    assert!(
+                        (dx - size).abs() < 0.01,
+                        "lat {lat}: dx {dx} vs size {size}"
+                    );
+                }
+                if let Some(below) = tiles
+                    .iter()
+                    .find(|o| o.coord.y == t.coord.y + 1 && o.coord.x == t.coord.x)
+                {
+                    let dy = below.screen_y - t.screen_y;
+                    assert!(
+                        (dy - size).abs() < 0.01,
+                        "lat {lat}: dy {dy} vs size {size}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The tile under the viewport centre must be the tile containing the camera centre.
+    #[test]
+    fn test_placement_agrees_with_camera_centre() {
+        let camera = Camera::new(Coordinate::new(51.5, -0.1), 10.0);
+        let viewport = Viewport::new(1080, 2280, 3.0);
+        let tiles = visible_tiles(&camera, &viewport);
+
+        let cx = viewport.width as f32 / 2.0;
+        let cy = viewport.height as f32 / 2.0;
+        let hit = tiles
+            .iter()
+            .find(|t| {
+                cx >= t.screen_x
+                    && cx < t.screen_x + t.size
+                    && cy >= t.screen_y
+                    && cy < t.screen_y + t.size
+            })
+            .expect("a tile must cover the viewport centre");
+
+        let expected = camera
+            .visible_bounds(&viewport)
+            .tile_range(camera.tile_zoom());
+        assert!(hit.coord.x >= expected.x_min && hit.coord.x <= expected.x_max);
+        assert!(hit.coord.y >= expected.y_min && hit.coord.y <= expected.y_max);
+    }
+
+    /// Tiles at a fractional zoom scale away from 256, so the map zooms smoothly.
+    #[test]
+    fn test_fractional_zoom_scales_tiles() {
+        let viewport = Viewport::new(1080, 2280, 1.0);
+        let whole = visible_tiles(&Camera::new(Coordinate::new(51.5, -0.1), 10.0), &viewport);
+        let frac = visible_tiles(&Camera::new(Coordinate::new(51.5, -0.1), 10.3), &viewport);
+        assert!((whole[0].size - 256.0).abs() < 0.01);
+        assert!(frac[0].size > whole[0].size);
     }
 }

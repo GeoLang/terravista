@@ -84,38 +84,34 @@ impl Camera {
         self.zoom.round().clamp(0.0, 22.0) as u8
     }
 
+    /// Web Mercator world size in device pixels at the current zoom.
+    pub fn world_size(&self, viewport: &Viewport) -> f64 {
+        256.0 * viewport.device_pixel_ratio as f64 * 2.0_f64.powf(self.zoom)
+    }
+
     /// Get the visible bounding box at current camera state.
     pub fn visible_bounds(&self, viewport: &Viewport) -> VisibleBounds {
-        let scale = 2.0_f64.powf(self.zoom);
-        let world_per_pixel = 360.0 / (256.0 * scale);
-
-        let half_w = (viewport.logical_width() as f64 / 2.0) * world_per_pixel;
-        let half_h = (viewport.logical_height() as f64 / 2.0) * world_per_pixel;
+        let world = self.world_size(viewport);
+        let cx = lon_to_world_x(self.center.longitude, world);
+        let cy = lat_to_world_y(self.center.latitude, world);
+        let half_w = viewport.width as f64 / 2.0;
+        let half_h = viewport.height as f64 / 2.0;
 
         VisibleBounds {
-            min_lon: self.center.longitude - half_w,
-            max_lon: self.center.longitude + half_w,
-            min_lat: (self.center.latitude - half_h).max(-85.051_129),
-            max_lat: (self.center.latitude + half_h).min(85.051_129),
+            min_lon: world_x_to_lon(cx - half_w, world),
+            max_lon: world_x_to_lon(cx + half_w, world),
+            min_lat: world_y_to_lat((cy + half_h).min(world), world),
+            max_lat: world_y_to_lat((cy - half_h).max(0.0), world),
         }
     }
 
-    /// Pan the camera by pixel deltas.
+    /// Pan the camera by device-pixel deltas.
     pub fn pan(&mut self, dx: f64, dy: f64, viewport: &Viewport) {
-        let scale = 2.0_f64.powf(self.zoom);
-        let world_per_pixel = 360.0 / (256.0 * scale);
-        self.center.longitude -= dx * world_per_pixel;
-        self.center.latitude += dy * world_per_pixel;
-        self.center.latitude = self.center.latitude.clamp(-85.051_129, 85.051_129);
-
-        // Wrap longitude
-        if self.center.longitude > 180.0 {
-            self.center.longitude -= 360.0;
-        } else if self.center.longitude < -180.0 {
-            self.center.longitude += 360.0;
-        }
-
-        let _ = viewport; // used for world_per_pixel calc above
+        let world = self.world_size(viewport);
+        let x = lon_to_world_x(self.center.longitude, world) - dx;
+        let y = (lat_to_world_y(self.center.latitude, world) - dy).clamp(0.0, world);
+        self.center.longitude = wrap_lon(world_x_to_lon(x, world));
+        self.center.latitude = world_y_to_lat(y, world);
     }
 
     /// Zoom by a delta (positive = zoom in).
@@ -201,6 +197,38 @@ impl TileCoord {
     }
 }
 
+/// Maximum latitude representable in Web Mercator.
+pub const MAX_LATITUDE: f64 = 85.051_129;
+
+/// Longitude to Web Mercator world-pixel X, where `world` is the world size in pixels.
+pub fn lon_to_world_x(lon: f64, world: f64) -> f64 {
+    (lon + 180.0) / 360.0 * world
+}
+
+/// Latitude to Web Mercator world-pixel Y (increases southward).
+pub fn lat_to_world_y(lat: f64, world: f64) -> f64 {
+    let clamped = lat.clamp(-MAX_LATITUDE, MAX_LATITUDE);
+    let s = clamped.to_radians().tan().asinh();
+    (1.0 - s / std::f64::consts::PI) / 2.0 * world
+}
+
+/// Web Mercator world-pixel X back to longitude.
+pub fn world_x_to_lon(x: f64, world: f64) -> f64 {
+    x / world * 360.0 - 180.0
+}
+
+/// Web Mercator world-pixel Y back to latitude.
+pub fn world_y_to_lat(y: f64, world: f64) -> f64 {
+    (std::f64::consts::PI * (1.0 - 2.0 * y / world))
+        .sinh()
+        .atan()
+        .to_degrees()
+}
+
+fn wrap_lon(lon: f64) -> f64 {
+    (lon + 180.0).rem_euclid(360.0) - 180.0
+}
+
 fn lon_to_tile_x(lon: f64, n: u32) -> u32 {
     (((lon + 180.0) / 360.0) * n as f64)
         .floor()
@@ -266,5 +294,84 @@ mod tests {
         let vp = Viewport::new(800, 600, 1.0);
         cam.pan(100.0, 0.0, &vp);
         assert!(cam.center.longitude < 0.0);
+    }
+
+    #[test]
+    fn test_world_projection_roundtrip() {
+        let world = 256.0 * 2.0_f64.powi(12);
+        for lat in [0.0, 51.5, -33.9, 71.0, 85.0] {
+            let y = lat_to_world_y(lat, world);
+            assert!((world_y_to_lat(y, world) - lat).abs() < 1e-6, "lat {lat}");
+        }
+        for lon in [0.0, -0.1, 179.9, -179.9] {
+            let x = lon_to_world_x(lon, world);
+            assert!((world_x_to_lon(x, world) - lon).abs() < 1e-9, "lon {lon}");
+        }
+    }
+
+    /// A pixel of vertical pan covers fewer degrees of latitude the further you
+    /// are from the equator. Linear-degree panning would move by the same amount.
+    #[test]
+    fn test_pan_latitude_follows_mercator() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let shift = |lat: f64| {
+            let mut cam = Camera::new(Coordinate::new(lat, 0.0), 10.0);
+            cam.pan(0.0, 100.0, &vp);
+            cam.center.latitude - lat
+        };
+
+        let at_equator = shift(0.0);
+        let at_london = shift(51.5);
+        assert!(at_equator > 0.0 && at_london > 0.0);
+        assert!(
+            at_london < at_equator * 0.7,
+            "equator {at_equator} vs london {at_london}"
+        );
+    }
+
+    #[test]
+    fn test_pan_roundtrip() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let mut cam = Camera::new(Coordinate::new(51.5, -0.1), 12.0);
+        cam.pan(240.0, -180.0, &vp);
+        cam.pan(-240.0, 180.0, &vp);
+        assert!((cam.center.latitude - 51.5).abs() < 1e-9);
+        assert!((cam.center.longitude - -0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_pan_wraps_across_antimeridian() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let mut cam = Camera::new(Coordinate::new(0.0, 179.0), 4.0);
+        cam.pan(-2000.0, 0.0, &vp);
+        assert!(cam.center.longitude >= -180.0 && cam.center.longitude <= 180.0);
+        assert!(cam.center.longitude < 0.0, "should have wrapped west");
+    }
+
+    #[test]
+    fn test_pan_clamps_at_mercator_pole() {
+        let vp = Viewport::new(800, 600, 1.0);
+        let mut cam = Camera::new(Coordinate::new(84.0, 0.0), 4.0);
+        cam.pan(0.0, 100_000.0, &vp);
+        assert!(cam.center.latitude <= MAX_LATITUDE);
+        assert!(cam.center.latitude > 84.0);
+    }
+
+    /// Visible bounds must be symmetric in world-pixel space around the centre,
+    /// which off the equator means asymmetric in degrees.
+    #[test]
+    fn test_visible_bounds_off_equator() {
+        let vp = Viewport::new(1080, 2280, 3.0);
+        let cam = Camera::new(Coordinate::new(51.5, -0.1), 10.0);
+        let b = cam.visible_bounds(&vp);
+        assert!(b.min_lat < 51.5 && b.max_lat > 51.5);
+        assert!(b.min_lon < -0.1 && b.max_lon > -0.1);
+
+        let world = cam.world_size(&vp);
+        let cy = lat_to_world_y(cam.center.latitude, world);
+        let top = lat_to_world_y(b.max_lat, world);
+        let bottom = lat_to_world_y(b.min_lat, world);
+        assert!((cy - top - vp.height as f64 / 2.0).abs() < 1e-6);
+        assert!((bottom - cy - vp.height as f64 / 2.0).abs() < 1e-6);
     }
 }
