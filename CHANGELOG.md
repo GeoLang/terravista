@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-29
+
+- Camera math rewritten in Web Mercator world-pixel space: pan, visible bounds,
+  and tile placement now agree at every latitude, and rotation is rendered.
+- Pinch zoom anchors under the fingers; tile zoom is dpr-biased for sharp HiDPI.
+- C FFI grown from 18 to 28 symbols: gestures, tile range and placements,
+  tile URLs, cache I/O, bearing/pitch getters.
+- Fixed reachable panics and wrong results in navigation (point-to-segment
+  off-route), offline bbox queries (envelope intersection), color parsing, and
+  tile packages.
+- Android: Kotlin `MapView` library (`android/`, published via JitPack as
+  `com.github.GeoLang:terravista`) with raster tile fetching and drawing built
+  in, prebuilt 16 KB-aligned natives, a sample app, and a plain-Java example
+  (`examples/android-testapp`).
+
 ## [0.1.0] — 2025-07-14
 
 ### Added

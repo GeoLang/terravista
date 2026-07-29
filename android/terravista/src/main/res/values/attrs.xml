@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="MapView">
+        <attr name="tvCenterLatitude" format="float" />
+        <attr name="tvCenterLongitude" format="float" />
+        <attr name="tvZoom" format="float" />
+        <attr name="tvBearing" format="float" />
+        <attr name="tvMinZoom" format="float" />
+        <attr name="tvMaxZoom" format="float" />
+        <attr name="tvTileUrlTemplate" format="string" />
+    </declare-styleable>
+</resources>

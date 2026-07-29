@@ -1,0 +1,9 @@
+# JitPack builds the Android library from the gradle project in android/.
+# The Rust core is not built here: JitPack has no Rust toolchain, so the .so
+# files under android/terravista/src/main/jniLibs are committed prebuilt.
+# Regenerate them with android/tools/build-natives.sh.
+jdk:
+  - openjdk17
+
+install:
+  - cd android && ./gradlew :terravista:publishToMavenLocal -PVERSION_NAME=$VERSION
