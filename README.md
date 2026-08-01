@@ -168,7 +168,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (58 tests: 35 unit, 23 integration)
+# Run tests (107 tests)
 cargo test
 
 # Lint
