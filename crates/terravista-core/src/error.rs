@@ -22,6 +22,9 @@ pub enum Error {
     #[error("style parse error: {0}")]
     StyleParse(String),
 
+    #[error("vector tile decode error: {0}")]
+    VectorTile(String),
+
     #[error("renderer error: {0}")]
     Renderer(String),
 

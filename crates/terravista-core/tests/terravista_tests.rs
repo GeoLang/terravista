@@ -2,6 +2,8 @@
 
 use terravista_core::camera::*;
 use terravista_core::location::*;
+use terravista_core::mvt::*;
+use terravista_core::renderer::*;
 use terravista_core::route::*;
 use terravista_core::style::*;
 use terravista_core::tile_cache::*;
@@ -222,6 +224,89 @@ fn test_map_style_serialization() {
     let back: MapStyle = serde_json::from_str(&json).unwrap();
     assert_eq!(back.name, "Test Style");
     assert_eq!(back.layers.len(), 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Vector tile tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Three layers over one tile, encoded by the mapbox-vector-tile Python
+/// reference implementation, so the decoder is checked against bytes it did
+/// not produce.
+const SAMPLE_TILE: &[u8] = include_bytes!("fixtures/sample.mvt");
+
+#[test]
+fn test_decode_reference_encoder_tile() {
+    let tile = decode_tile(SAMPLE_TILE).unwrap();
+    let names: Vec<&str> = tile.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["places", "roads", "water"]);
+
+    let places = tile.layer("places").unwrap();
+    assert_eq!(places.extent, 4096);
+    assert_eq!(
+        places.features[0].geometry,
+        TileGeometry::Points(vec![[25.0, 17.0]])
+    );
+    assert_eq!(
+        places.features[0].attributes.get("name"),
+        Some(&AttributeValue::String("London".into()))
+    );
+    assert_eq!(
+        places.features[0].attributes.get("population"),
+        Some(&AttributeValue::Integer(8_982_000))
+    );
+
+    assert_eq!(
+        tile.layer("roads").unwrap().features[0].geometry,
+        TileGeometry::Lines(vec![vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]]])
+    );
+    assert_eq!(
+        tile.layer("water").unwrap().features[0]
+            .attributes
+            .get("depth"),
+        Some(&AttributeValue::Number(3.5))
+    );
+}
+
+/// The encoder winds the outer ring one way and the hole the other, which is
+/// the only thing separating a hole from a second polygon.
+#[test]
+fn test_decode_reference_polygon_hole() {
+    let tile = decode_tile(SAMPLE_TILE).unwrap();
+    let TileGeometry::Polygons(polygons) = &tile.layer("water").unwrap().features[0].geometry
+    else {
+        panic!("expected polygons");
+    };
+    assert_eq!(polygons.len(), 1);
+    assert_eq!(polygons[0].holes.len(), 1);
+    assert_eq!(polygons[0].exterior.first(), polygons[0].exterior.last());
+}
+
+#[test]
+fn test_reference_tile_places_onto_the_screen() {
+    let tile = decode_tile(SAMPLE_TILE).unwrap();
+    let placement = TilePlacement {
+        coord: TileCoord::new(14, 8192, 5450),
+        screen_x: 0.0,
+        screen_y: 0.0,
+        size: 4096.0,
+    };
+    let commands = vector_tile_commands(&tile, &placement, &VectorStyle::default());
+    assert_eq!(commands.len(), 3);
+
+    let RenderCommand::DrawVectorLayer {
+        layer_name,
+        features,
+    } = &commands[0]
+    else {
+        panic!("expected a layer command");
+    };
+    // a placement the size of the extent draws tile units one for one
+    assert_eq!(layer_name, "places");
+    assert!(matches!(
+        features[0].geometry,
+        RenderGeometry::Point { x, y, .. } if x == 25.0 && y == 17.0
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

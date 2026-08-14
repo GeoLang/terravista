@@ -27,6 +27,7 @@ pub mod camera;
 pub mod error;
 pub mod gesture;
 pub mod location;
+pub mod mvt;
 pub mod offline;
 pub mod renderer;
 pub mod route;
