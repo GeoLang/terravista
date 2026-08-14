@@ -155,10 +155,9 @@ so that waits for the GPU backends in v0.3.
 ### 📦 Offline Tile Packages
 
 - Custom TVPK binary archive format for fully disconnected use, not MBTiles or SQLite
-- `PackageDefinition` with bounding box, zoom range, tile source URL
-- Tile count estimation before download
-- Serialize and deserialize a package, with a magic-byte header and bbox validation
-- Region-based tile enumeration across zoom levels
+- `PackageDefinition` pairs an `OfflineRegion` with a tile format
+- Tile enumeration and size estimation come from the region, the same ones the tile cache pre-fetches from
+- Serialize and deserialize a package, with a magic-byte header and MBTiles-style metadata keys
 - Held in memory, and populated by the host since there is no downloader here
 
 ---
@@ -177,7 +176,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (136 tests)
+# Run tests (130 tests)
 cargo test
 
 # Lint

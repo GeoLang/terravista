@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - C FFI grown from 53 to 59 symbols: region tile count, size estimate, plan and
   read-back, and the camera's visible bounds, which is what a host hands the
   planner to save what the user is looking at.
+- Tile packages define themselves by an `OfflineRegion`: `PackageDefinition` is
+  a region plus a format, and the module's own bounding box, tile-range maths
+  and size estimate are gone in favour of the region's, which was the third
+  copy of that calculation. The TVPK bytes are unchanged. Bounds read back from
+  a package's metadata now clamp at the Mercator limit and cross the
+  antimeridian the short way round like any other region, where before an
+  inverted box was rejected and silently replaced by the whole world.
 - Sample app has a small real UI: the basemap button opens a picker listing the
   six sources with the current one checked, saving a region asks first with the
   tile count and size from `estimateRegion`, and the map carries floating zoom
