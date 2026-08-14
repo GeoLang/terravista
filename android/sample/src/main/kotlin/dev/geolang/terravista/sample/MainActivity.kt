@@ -26,7 +26,11 @@ class MainActivity : Activity() {
 
         val BASEMAPS = listOf(
             "OSM" to "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            "Carto" to "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+            "Satellite" to "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            "Topo" to "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+            "Voyager" to "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+            "Light" to "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+            "Dark" to "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
         )
 
         // MapLibre's keyless demo tileset: country polygons and graticule lines,
