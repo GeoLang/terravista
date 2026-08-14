@@ -13,6 +13,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 terravista-core = { path = "crates/terravista-core" }
+jung-mvt = { git = "https://github.com/GeoLang/jung.git", tag = "v0.2.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

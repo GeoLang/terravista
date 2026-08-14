@@ -109,7 +109,7 @@ so that waits for the GPU backends in v0.3.
 
 ### 🧬 Vector Tiles
 
-- MVT spec v2 decoding: layers, features, points, lines, polygons and attributes
+- MVT spec v2 decoding by [`jung-mvt`](https://github.com/GeoLang/jung): layers, features, points, lines, polygons and attributes
 - Ring winding decides holes, so a multipolygon keeps its parts
 - Coordinates stay in tile units, so placing a tile is a scale and a translate
 - A fixed default look per layer name, no style spec, no labels and no fonts
@@ -177,7 +177,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (136 tests)
+# Run tests (123 tests)
 cargo test
 
 # Lint

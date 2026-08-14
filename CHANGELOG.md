@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MVT decoding in the core: layers, features, points, lines, polygons and
   attributes, with ring winding deciding holes so multipolygons keep their
-  parts. No new dependency, the decoder reads the protobuf itself.
+  parts. The decoder is `jung-mvt`, which reads the protobuf itself and pulls
+  in nothing beyond `thiserror`.
 - Vector tiles render: `renderer::vector_tile_commands` turns a decoded tile
   and its placement into `DrawVectorLayer` commands in screen coordinates,
   with a fixed look per layer name. No style spec, no labels, no fonts.
