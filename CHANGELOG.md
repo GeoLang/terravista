@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - C FFI grown from 53 to 59 symbols: region tile count, size estimate, plan and
   read-back, and the camera's visible bounds, which is what a host hands the
   planner to save what the user is looking at.
+- Sample app has a small real UI: the basemap button opens a picker listing the
+  six sources with the current one checked, saving a region asks first with the
+  tile count and size from `estimateRegion`, and the map carries floating zoom
+  buttons and a compass that turns with the bearing and faces the map north
+  when tapped. Stock widgets throughout, no new dependencies.
 
 ## [0.4.0] - 2026-08-13
 

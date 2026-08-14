@@ -7,4 +7,14 @@
     <string name="region_save">Save view</string>
     <string name="region_delete">Delete region</string>
     <string name="region_cancel">Cancel</string>
+    <string name="zoom_in">+</string>
+    <string name="zoom_out">−</string>
+    <string name="compass">Compass, tap to face north</string>
+    <!-- a north marker and its label, rotated to the map's bearing -->
+    <string name="compass_face">▲\nN</string>
+    <string name="download_title">Save this view?</string>
+    <string name="download_confirm">Download</string>
+    <string name="download_dismiss">Cancel</string>
+    <string name="region_too_big">Region too large</string>
+    <string name="ok">OK</string>
 </resources>

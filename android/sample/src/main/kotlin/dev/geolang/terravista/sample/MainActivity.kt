@@ -1,12 +1,15 @@
 package dev.geolang.terravista.sample
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.widget.Button
+import android.widget.PopupMenu
 import android.widget.TextView
 import dev.geolang.terravista.CameraPosition
 import dev.geolang.terravista.MAX_REGION_TILES
@@ -19,6 +22,7 @@ import dev.geolang.terravista.Route
 import dev.geolang.terravista.RoutePoint
 import dev.geolang.terravista.RouteStep
 import dev.geolang.terravista.TrackingMode
+import dev.geolang.terravista.VisibleBounds
 import dev.geolang.terravista.bearingBetween
 
 class MainActivity : Activity() {
@@ -51,6 +55,9 @@ class MainActivity : Activity() {
         const val LONDON_ZOOM = 12.0
         const val RASTER_MAX_ZOOM = 17.0
 
+        /** Menu group for the basemaps, so the current one shows as checked. */
+        const val BASEMAP_GROUP = 1
+
         /** The one region this app saves: whatever was on screen at the time. */
         const val REGION_NAME = "current view"
         /** Deep enough to be worth having offline, shallow enough to be polite. */
@@ -75,6 +82,7 @@ class MainActivity : Activity() {
     private lateinit var map: MapView
     private lateinit var readout: TextView
     private lateinit var downloadButton: Button
+    private lateinit var compass: TextView
     private var basemap = 0
     private var download: RegionDownload? = null
 
@@ -109,10 +117,19 @@ class MainActivity : Activity() {
         val navigateButton = findViewById<Button>(R.id.navigate)
         val vectorButton = findViewById<Button>(R.id.vector)
         downloadButton = findViewById(R.id.download)
+        compass = findViewById(R.id.compass)
 
         // everything shown here comes back from the SDK through the public API
         map.onCameraChangeListener = OnCameraChangeListener { camera ->
+            compass.rotation = -camera.bearing.toFloat()
             if (!walking) showCamera(camera)
+        }
+
+        findViewById<TextView>(R.id.zoomIn).setOnClickListener { zoomBy(1.0) }
+        findViewById<TextView>(R.id.zoomOut).setOnClickListener { zoomBy(-1.0) }
+        compass.setOnClickListener {
+            map.bearing = 0.0
+            Log.i(TAG, "compass reset to north")
         }
 
         vectorButton.setOnClickListener { if (vector) hideVectorLayer() else showVectorLayer() }
@@ -121,23 +138,44 @@ class MainActivity : Activity() {
             when {
                 download != null -> cancelDownload()
                 savedRegion() != null -> deleteRegion()
-                else -> downloadCurrentView()
+                else -> confirmDownload()
             }
         }
         showRegionState()
 
-        basemapButton.setOnClickListener {
-            basemap = (basemap + 1) % BASEMAPS.size
-            map.tileUrlTemplate = BASEMAPS[basemap].second
-            Log.i(TAG, "basemap -> ${BASEMAPS[basemap].first}")
-            // nudge the readout, switching source does not move the camera
-            map.setCenter(map.cameraPosition.latitude, map.cameraPosition.longitude)
-        }
+        basemapButton.setOnClickListener { showBasemapMenu(it) }
 
         navigateButton.setOnClickListener { if (walking) stopWalk() else startWalk() }
 
         // seed the readout before the first gesture
         map.setCenter(LONDON_LATITUDE, LONDON_LONGITUDE)
+    }
+
+    // ── Map controls ─────────────────────────────────────────────────────────
+
+    /** The sources by name, the current one checked. */
+    private fun showBasemapMenu(anchor: View) {
+        val menu = PopupMenu(this, anchor)
+        BASEMAPS.forEachIndexed { index, (name, _) ->
+            menu.menu.add(BASEMAP_GROUP, index, index, name)
+        }
+        menu.menu.setGroupCheckable(BASEMAP_GROUP, true, true)
+        menu.menu.findItem(basemap)?.isChecked = true
+
+        menu.setOnMenuItemClickListener { item ->
+            basemap = item.itemId
+            map.tileUrlTemplate = BASEMAPS[basemap].second
+            Log.i(TAG, "basemap -> ${BASEMAPS[basemap].first}")
+            // nudge the readout, switching source does not move the camera
+            map.setCenter(map.cameraPosition.latitude, map.cameraPosition.longitude)
+            true
+        }
+        menu.show()
+    }
+
+    private fun zoomBy(steps: Double) {
+        map.zoom += steps
+        Log.i(TAG, "zoom -> %.2f".format(map.zoom))
     }
 
     private fun showCamera(camera: CameraPosition) {
@@ -204,8 +242,11 @@ class MainActivity : Activity() {
 
     // ── Offline region ───────────────────────────────────────────────────────
 
-    /** Save what is on screen now, plus a couple of zoom levels below it. */
-    private fun downloadCurrentView() {
+    /**
+     * Offer what saving the current view would cost, and only fetch if the
+     * offer is taken.
+     */
+    private fun confirmDownload() {
         val bounds = map.visibleBounds ?: return
         val minZoom = map.cameraPosition.zoom.toInt()
         val maxZoom = minZoom + REGION_EXTRA_ZOOMS
@@ -215,13 +256,39 @@ class MainActivity : Activity() {
             bounds.maxLatitude, bounds.maxLongitude,
             minZoom, maxZoom,
         )
+        Log.i(TAG, "region estimate z$minZoom-$maxZoom: $estimate")
+
         if (estimate.tileCount > MAX_REGION_TILES) {
-            val line = "region is ${estimate.tileCount} tiles, zoom in first"
-            readout.text = line
-            Log.w(TAG, line)
+            AlertDialog.Builder(this)
+                .setTitle(R.string.region_too_big)
+                .setMessage(
+                    "${estimate.tileCount} tiles, over the $MAX_REGION_TILES limit. " +
+                        "Zoom in and try again.",
+                )
+                .setPositiveButton(R.string.ok, null)
+                .show()
             return
         }
 
+        AlertDialog.Builder(this)
+            .setTitle(R.string.download_title)
+            .setMessage(
+                "zoom $minZoom to $maxZoom\n" +
+                    "${estimate.tileCount} tiles, about ${megabytes(estimate.estimatedBytes)}",
+            )
+            .setPositiveButton(R.string.download_confirm) { _, _ ->
+                startDownload(bounds, minZoom, maxZoom, estimate.tileCount)
+            }
+            .setNegativeButton(R.string.download_dismiss, null)
+            .show()
+    }
+
+    private fun startDownload(
+        bounds: VisibleBounds,
+        minZoom: Int,
+        maxZoom: Int,
+        estimatedTiles: Long,
+    ) {
         download = map.downloadRegion(
             REGION_NAME,
             bounds.minLatitude, bounds.minLongitude,
@@ -240,7 +307,7 @@ class MainActivity : Activity() {
             },
         )
         showRegionState()
-        Log.i(TAG, "region z$minZoom-$maxZoom, ${estimate.tileCount} tiles started")
+        Log.i(TAG, "region z$minZoom-$maxZoom, $estimatedTiles tiles started")
     }
 
     private fun cancelDownload() {

@@ -25,6 +25,35 @@
         android:fontFamily="monospace" />
 
     <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginEnd="16dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/zoomIn"
+            style="@style/MapControl"
+            android:contentDescription="@string/zoom_in"
+            android:text="@string/zoom_in" />
+
+        <TextView
+            android:id="@+id/zoomOut"
+            style="@style/MapControl"
+            android:contentDescription="@string/zoom_out"
+            android:text="@string/zoom_out" />
+
+        <TextView
+            android:id="@+id/compass"
+            style="@style/MapControl"
+            android:layout_marginTop="24dp"
+            android:contentDescription="@string/compass"
+            android:textSize="12sp"
+            android:text="@string/compass_face" />
+
+    </LinearLayout>
+
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"

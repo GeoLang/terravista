@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- round floating control over the map -->
+    <style name="MapControl">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:background">@drawable/map_control</item>
+        <item name="android:foreground">?android:attr/selectableItemBackgroundBorderless</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">#DD000000</item>
+        <item name="android:textSize">20sp</item>
+    </style>
+
+</resources>
