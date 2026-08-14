@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "terravista-core"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "jung-mvt",
  "serde",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "terravista-ffi"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "terravista-core",
 ]
