@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a package's metadata now clamp at the Mercator limit and cross the
   antimeridian the short way round like any other region, where before an
   inverted box was rejected and silently replaced by the whole world.
+- CI builds the Android SDK: a job on JDK 21 assembles the library's release
+  AAR and the sample's debug APK and runs the sample's unit tests, so a Kotlin
+  break fails the build instead of surfacing at the next JitPack release.
 - Sample app draws street-level vector tiles. It reads OpenFreeMap's TileJSON at
   https://tiles.openfreemap.org/planet the first time the vector layer is asked
   for, and takes the current tile url and the tileset's max zoom from it, because
