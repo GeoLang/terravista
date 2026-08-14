@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 50 to 53 symbols.
 - Android: `MapView.setLayerStyle(...)` and `MapView.visibleVectorLayers`, and
   the sample app draws a vector layer over the raster basemap.
+- Offline tiles on Android. Every fetched tile is written to a disk cache under
+  the app's cache directory, keyed by source and coordinate, read before the
+  network and evicted least-recently-read against `diskCacheSizeBytes`, 512 MB
+  by default. Tiles never expire.
+- Pinned regions: `MapView.downloadRegion(...)` with progress and cancellation,
+  `regions()`, `deleteRegion(name)` and `estimateRegion(...)`. Region tiles live
+  under the app's files directory, are read before the ambient cache and never
+  evict. A region is capped at 10,000 tiles, because public tile servers forbid
+  bulk downloading.
+- `OfflineRegion` enumerates its own tiles: `tiles()` and `tile_count()` now
+  share one range calculation, taken from the camera's, so a region clamps at
+  the Mercator limit and crosses the antimeridian the short way round instead
+  of underflowing its own arithmetic. `TileRange::count` counts in `u64`, which
+  a whole world of tiles overflows past zoom 15.
+- C FFI grown from 53 to 59 symbols: region tile count, size estimate, plan and
+  read-back, and the camera's visible bounds, which is what a host hands the
+  planner to save what the user is looking at.
 
 ## [0.4.0] - 2026-08-13
 

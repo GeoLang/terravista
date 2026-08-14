@@ -4,4 +4,7 @@
     <string name="switch_basemap">Basemap</string>
     <string name="navigate">Navigate</string>
     <string name="vector_layer">Countries</string>
+    <string name="region_save">Save view</string>
+    <string name="region_delete">Delete region</string>
+    <string name="region_cancel">Cancel</string>
 </resources>

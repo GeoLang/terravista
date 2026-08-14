@@ -177,7 +177,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (126 tests)
+# Run tests (136 tests)
 cargo test
 
 # Lint
@@ -357,6 +357,35 @@ frame's layer table. Both the index and the table only hold until the next
 
 Vector tiles are a second source: they cache and draw alongside the raster ones,
 each with its own URL template.
+
+### Offline Regions
+
+```c
+// What a region costs, without enumerating it.
+uint64_t tv_region_tile_count(double min_lat, double min_lon, double max_lat, double max_lon,
+                              uint8_t min_zoom, uint8_t max_zoom);
+uint64_t tv_region_estimated_bytes(double min_lat, double min_lon, double max_lat, double max_lon,
+                                   uint8_t min_zoom, uint8_t max_zoom);
+
+typedef struct { uint8_t z; uint32_t x, y; } TvTileCoordinate;
+
+// Enumerate the region, read it back, then drop it. Lowest zoom first.
+uint32_t tv_region_plan(TvMapState* state, double min_lat, double min_lon, double max_lat,
+                        double max_lon, uint8_t min_zoom, uint8_t max_zoom);
+bool tv_region_tile_at(const TvMapState* state, uint32_t index, TvTileCoordinate* out);
+void tv_region_clear(TvMapState* state);
+
+// The box the camera covers, to plan a download of what the user is looking at.
+typedef struct { double min_lat, min_lon, max_lat, max_lon; } TvBounds;
+bool tv_map_visible_bounds(const TvMapState* state, TvBounds* out);
+```
+
+Latitudes past the Mercator limit clamp to the top and bottom tile rows, and a
+region whose east edge is west of its west edge crosses the antimeridian and
+covers the short way round. `tv_region_plan` returns 0 for a region covering
+nothing and for one over `TV_REGION_MAX_TILES`, so ask for the count first.
+
+Fetching and storing the tiles is the host's job, as it is for the tile cache.
 
 ### Utility
 

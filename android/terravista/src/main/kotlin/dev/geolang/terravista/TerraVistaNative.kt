@@ -54,6 +54,9 @@ internal object TerraVistaNative {
         ids: LongArray?,
     ): Int
 
+    /** `out` receives minLatitude, minLongitude, maxLatitude, maxLongitude. */
+    @JvmStatic external fun visibleBounds(handle: Long, out: DoubleArray): Boolean
+
     /** Recomputes the frame's tile set. Call before [visibleTileAt]. */
     @JvmStatic external fun visibleTileCount(handle: Long): Int
 
@@ -166,6 +169,40 @@ internal object TerraVistaNative {
     @JvmStatic external fun navProgress(handle: Long, counts: IntArray, distances: DoubleArray): Boolean
     @JvmStatic external fun navInstruction(handle: Long): String?
     @JvmStatic external fun navClear(handle: Long)
+
+    /** Tiles a region covers, without enumerating them. */
+    @JvmStatic external fun regionTileCount(
+        minLat: Double,
+        minLon: Double,
+        maxLat: Double,
+        maxLon: Double,
+        minZoom: Int,
+        maxZoom: Int,
+    ): Long
+
+    @JvmStatic external fun regionEstimatedBytes(
+        minLat: Double,
+        minLon: Double,
+        maxLat: Double,
+        maxLon: Double,
+        minZoom: Int,
+        maxZoom: Int,
+    ): Long
+
+    /** Enumerates the region's tiles, lowest zoom first. Read them with [regionTileAt]. */
+    @JvmStatic external fun regionPlan(
+        handle: Long,
+        minLat: Double,
+        minLon: Double,
+        maxLat: Double,
+        maxLon: Double,
+        minZoom: Int,
+        maxZoom: Int,
+    ): Int
+
+    /** `zxy` receives z, x, y. */
+    @JvmStatic external fun regionTileAt(handle: Long, index: Int, zxy: IntArray): Boolean
+    @JvmStatic external fun regionClear(handle: Long)
 
     @JvmStatic external fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double
     @JvmStatic external fun bearingBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double

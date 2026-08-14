@@ -26,7 +26,7 @@ use terravista_core::renderer::{
     vector_tile_commands, visible_tiles,
 };
 use terravista_core::route::{Maneuver, NavStatus, NavigationUpdate, Navigator, Route, RouteStep};
-use terravista_core::tile_cache::{CacheConfig, TileCache, TileData, TileMeta};
+use terravista_core::tile_cache::{CacheConfig, OfflineRegion, TileCache, TileData, TileMeta};
 
 /// Opaque map state handle.
 pub struct TvMapState {
@@ -42,6 +42,8 @@ pub struct TvMapState {
     /// Last result of `tv_nav_update`, read back by `tv_nav_progress`.
     nav_last: Option<NavigationUpdate>,
     vector: VectorState,
+    /// Filled by `tv_region_plan`, read by `tv_region_tile_at`.
+    region: Vec<TileCoord>,
 }
 
 /// The vector tile source: raw tiles as fetched, their decoded form, and the
@@ -87,6 +89,7 @@ pub extern "C" fn tv_map_create(
             rings: Vec::new(),
             layer_names: Vec::new(),
         },
+        region: Vec::new(),
     });
     Box::into_raw(state)
 }
@@ -256,6 +259,41 @@ pub unsafe extern "C" fn tv_map_tile_range(
         x_max: range.x_max,
         y_min: range.y_min,
         y_max: range.y_max,
+    };
+    true
+}
+
+/// The geographic box the viewport covers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvBounds {
+    pub min_lat: f64,
+    pub min_lon: f64,
+    pub max_lat: f64,
+    pub max_lon: f64,
+}
+
+/// Write the bounds the current camera and viewport cover into `out`.
+///
+/// This is what to hand `tv_region_plan` to download what the user is looking
+/// at. Returns false if either pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_visible_bounds(
+    state: *const TvMapState,
+    out: *mut TvBounds,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let bounds = s.camera.visible_bounds(&s.viewport);
+    *out = TvBounds {
+        min_lat: bounds.min_lat,
+        min_lon: bounds.min_lon,
+        max_lat: bounds.max_lat,
+        max_lon: bounds.max_lon,
     };
     true
 }
@@ -984,6 +1022,141 @@ unsafe fn copy_out<T: Copy>(values: &[T], out: *mut T, cap: usize) -> usize {
         unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), out, n) };
     }
     values.len()
+}
+
+// ─── Offline Regions ─────────────────────────────────────────────────────────
+
+/// Most tiles `tv_region_plan` will enumerate.
+///
+/// The host decides what a reasonable region is; this only stops a bad bounding
+/// box from asking for a list too big to hold in memory.
+pub const TV_REGION_MAX_TILES: u64 = 100_000;
+
+/// One tile of a planned region.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvTileCoordinate {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+fn region(
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    min_zoom: u8,
+    max_zoom: u8,
+) -> OfflineRegion {
+    OfflineRegion {
+        name: String::new(),
+        min_zoom,
+        max_zoom,
+        min_lat,
+        max_lat,
+        min_lon,
+        max_lon,
+    }
+}
+
+/// How many tiles a region covers, without enumerating them.
+///
+/// Latitudes past the Mercator limit clamp, and a region whose east edge is
+/// west of its west edge crosses the antimeridian and covers the short way
+/// round. An inverted zoom span covers nothing.
+#[unsafe(no_mangle)]
+pub extern "C" fn tv_region_tile_count(
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    min_zoom: u8,
+    max_zoom: u8,
+) -> u64 {
+    region(min_lat, min_lon, max_lat, max_lon, min_zoom, max_zoom).tile_count()
+}
+
+/// Rough bytes a region would take on disk, at an average tile weight.
+#[unsafe(no_mangle)]
+pub extern "C" fn tv_region_estimated_bytes(
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    min_zoom: u8,
+    max_zoom: u8,
+) -> u64 {
+    region(min_lat, min_lon, max_lat, max_lon, min_zoom, max_zoom).estimated_size_bytes()
+}
+
+/// Enumerate a region's tiles and return how many it holds.
+///
+/// Read them back with `tv_region_tile_at`, lowest zoom first, and drop them
+/// with `tv_region_clear` once the download is done. Returns 0 for a region
+/// covering nothing and for one over `TV_REGION_MAX_TILES`, which is why a host
+/// asks `tv_region_tile_count` first.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_region_plan(
+    state: *mut TvMapState,
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    min_zoom: u8,
+    max_zoom: u8,
+) -> u32 {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return 0;
+    };
+    s.region.clear();
+
+    let region = region(min_lat, min_lon, max_lat, max_lon, min_zoom, max_zoom);
+    if region.tile_count() > TV_REGION_MAX_TILES {
+        return 0;
+    }
+    s.region.extend(region.tiles());
+    s.region.len() as u32
+}
+
+/// Read one tile from the plan built by `tv_region_plan`.
+///
+/// Returns false if the index is out of range or a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_region_tile_at(
+    state: *const TvMapState,
+    index: u32,
+    out: *mut TvTileCoordinate,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let Some(coord) = s.region.get(index as usize) else {
+        return false;
+    };
+    *out = TvTileCoordinate {
+        z: coord.z,
+        x: coord.x,
+        y: coord.y,
+    };
+    true
+}
+
+/// Drop the planned region, freeing the list.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_region_clear(state: *mut TvMapState) {
+    if let Some(s) = unsafe { state.as_mut() } {
+        s.region = Vec::new();
+    }
 }
 
 // ─── Projection ──────────────────────────────────────────────────────────────
@@ -2017,6 +2190,114 @@ mod tests {
         assert!(put_sample_tile(state, &placement));
         unsafe { tv_vector_cache_clear(state) };
         assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// London, small enough to download and deep enough to span zooms.
+    const REGION: (f64, f64, f64, f64) = (51.50, -0.13, 51.52, -0.10);
+
+    fn region_tile_at(state: *mut TvMapState, index: u32) -> Option<TvTileCoordinate> {
+        let mut tile = TvTileCoordinate { z: 0, x: 0, y: 0 };
+        unsafe { tv_region_tile_at(state, index, &mut tile) }.then_some(tile)
+    }
+
+    /// The plan hands back exactly what the estimate promised, and every tile
+    /// of it is readable.
+    #[test]
+    fn test_region_plan_matches_the_estimate() {
+        let state = map();
+        let (min_lat, min_lon, max_lat, max_lon) = REGION;
+        let count = tv_region_tile_count(min_lat, min_lon, max_lat, max_lon, 12, 14);
+        assert!(count > 0);
+        assert_eq!(
+            tv_region_estimated_bytes(min_lat, min_lon, max_lat, max_lon, 12, 14),
+            count * 20_000
+        );
+
+        let planned = unsafe { tv_region_plan(state, min_lat, min_lon, max_lat, max_lon, 12, 14) };
+        assert_eq!(u64::from(planned), count);
+
+        let zooms: Vec<u8> = (0..planned)
+            .map(|i| region_tile_at(state, i).unwrap().z)
+            .collect();
+        assert_eq!(*zooms.first().unwrap(), 12);
+        assert_eq!(*zooms.last().unwrap(), 14);
+        assert!(region_tile_at(state, planned).is_none());
+
+        unsafe { tv_region_clear(state) };
+        assert!(region_tile_at(state, 0).is_none());
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// A region too big to hold plans nothing, so the host has to ask for the
+    /// count and offer a smaller one.
+    #[test]
+    fn test_region_plan_refuses_the_world() {
+        let state = map();
+        assert!(tv_region_tile_count(-85.0, -180.0, 85.0, 180.0, 0, 14) > TV_REGION_MAX_TILES);
+        assert_eq!(
+            unsafe { tv_region_plan(state, -85.0, -180.0, 85.0, 180.0, 0, 14) },
+            0
+        );
+        assert!(region_tile_at(state, 0).is_none());
+
+        // and a fresh plan replaces whatever the last one left
+        let (min_lat, min_lon, max_lat, max_lon) = REGION;
+        assert!(unsafe { tv_region_plan(state, min_lat, min_lon, max_lat, max_lon, 12, 12) } > 0);
+        assert_eq!(
+            unsafe { tv_region_plan(state, min_lat, min_lon, max_lat, max_lon, 14, 12) },
+            0,
+            "an inverted zoom span covers nothing"
+        );
+        assert!(region_tile_at(state, 0).is_none());
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// The bounds a host would hand to `tv_region_plan` must cover the tiles
+    /// the same camera draws, or a download would save the wrong area.
+    #[test]
+    fn test_visible_bounds_cover_the_visible_tiles() {
+        let state = map();
+        let mut bounds = TvBounds {
+            min_lat: 0.0,
+            min_lon: 0.0,
+            max_lat: 0.0,
+            max_lon: 0.0,
+        };
+        assert!(unsafe { tv_map_visible_bounds(state, &mut bounds) });
+        assert!(bounds.min_lat < ROUTE[0].0 && bounds.max_lat > ROUTE[0].0);
+        assert!(bounds.min_lon < ROUTE[0].1 && bounds.max_lon > ROUTE[0].1);
+
+        let drawn = unsafe { tv_map_visible_tile_count(state) };
+        let zoom = first_visible_tile(state).z;
+        let planned = unsafe {
+            tv_region_plan(
+                state,
+                bounds.min_lat,
+                bounds.min_lon,
+                bounds.max_lat,
+                bounds.max_lon,
+                zoom,
+                zoom,
+            )
+        };
+        assert_eq!(planned, drawn);
+
+        assert!(!unsafe { tv_map_visible_bounds(std::ptr::null(), &mut bounds) });
+        assert!(!unsafe { tv_map_visible_bounds(state, std::ptr::null_mut()) });
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_region_calls_reject_nulls() {
+        assert_eq!(
+            unsafe { tv_region_plan(std::ptr::null_mut(), 51.5, -0.1, 51.6, 0.0, 12, 12) },
+            0
+        );
+        assert!(region_tile_at(std::ptr::null_mut(), 0).is_none());
+        let state = map();
+        assert!(!unsafe { tv_region_tile_at(state, 0, std::ptr::null_mut()) });
+        unsafe { tv_region_clear(std::ptr::null_mut()) };
         unsafe { tv_map_destroy(state) };
     }
 

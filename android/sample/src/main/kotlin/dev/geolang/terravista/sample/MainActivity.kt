@@ -9,8 +9,12 @@ import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import dev.geolang.terravista.CameraPosition
+import dev.geolang.terravista.MAX_REGION_TILES
 import dev.geolang.terravista.MapView
+import dev.geolang.terravista.OfflineRegion
 import dev.geolang.terravista.OnCameraChangeListener
+import dev.geolang.terravista.RegionDownload
+import dev.geolang.terravista.RegionDownloadListener
 import dev.geolang.terravista.Route
 import dev.geolang.terravista.RoutePoint
 import dev.geolang.terravista.RouteStep
@@ -47,6 +51,11 @@ class MainActivity : Activity() {
         const val LONDON_ZOOM = 12.0
         const val RASTER_MAX_ZOOM = 17.0
 
+        /** The one region this app saves: whatever was on screen at the time. */
+        const val REGION_NAME = "current view"
+        /** Deep enough to be worth having offline, shallow enough to be polite. */
+        const val REGION_EXTRA_ZOOMS = 2
+
         // down whitehall and over westminster bridge
         val DEMO_ROUTE = Route(
             points = listOf(
@@ -65,7 +74,9 @@ class MainActivity : Activity() {
 
     private lateinit var map: MapView
     private lateinit var readout: TextView
+    private lateinit var downloadButton: Button
     private var basemap = 0
+    private var download: RegionDownload? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private var walking = false
@@ -97,6 +108,7 @@ class MainActivity : Activity() {
         val basemapButton = findViewById<Button>(R.id.basemap)
         val navigateButton = findViewById<Button>(R.id.navigate)
         val vectorButton = findViewById<Button>(R.id.vector)
+        downloadButton = findViewById(R.id.download)
 
         // everything shown here comes back from the SDK through the public API
         map.onCameraChangeListener = OnCameraChangeListener { camera ->
@@ -104,6 +116,15 @@ class MainActivity : Activity() {
         }
 
         vectorButton.setOnClickListener { if (vector) hideVectorLayer() else showVectorLayer() }
+
+        downloadButton.setOnClickListener {
+            when {
+                download != null -> cancelDownload()
+                savedRegion() != null -> deleteRegion()
+                else -> downloadCurrentView()
+            }
+        }
+        showRegionState()
 
         basemapButton.setOnClickListener {
             basemap = (basemap + 1) % BASEMAPS.size
@@ -180,6 +201,78 @@ class MainActivity : Activity() {
         val layers = map.visibleVectorLayers
         return if (layers.isEmpty()) "vector layers: waiting" else "vector layers: ${layers.joinToString(", ")}"
     }
+
+    // ── Offline region ───────────────────────────────────────────────────────
+
+    /** Save what is on screen now, plus a couple of zoom levels below it. */
+    private fun downloadCurrentView() {
+        val bounds = map.visibleBounds ?: return
+        val minZoom = map.cameraPosition.zoom.toInt()
+        val maxZoom = minZoom + REGION_EXTRA_ZOOMS
+
+        val estimate = map.estimateRegion(
+            bounds.minLatitude, bounds.minLongitude,
+            bounds.maxLatitude, bounds.maxLongitude,
+            minZoom, maxZoom,
+        )
+        if (estimate.tileCount > MAX_REGION_TILES) {
+            val line = "region is ${estimate.tileCount} tiles, zoom in first"
+            readout.text = line
+            Log.w(TAG, line)
+            return
+        }
+
+        download = map.downloadRegion(
+            REGION_NAME,
+            bounds.minLatitude, bounds.minLongitude,
+            bounds.maxLatitude, bounds.maxLongitude,
+            minZoom, maxZoom,
+            object : RegionDownloadListener {
+                override fun onProgress(completed: Int, failed: Int, total: Int) {
+                    readout.text = "region z$minZoom-$maxZoom: $completed/$total tiles, $failed failed"
+                }
+
+                override fun onFinished(region: OfflineRegion?) {
+                    download = null
+                    Log.i(TAG, "region finished: $region")
+                    showRegionState()
+                }
+            },
+        )
+        showRegionState()
+        Log.i(TAG, "region z$minZoom-$maxZoom, ${estimate.tileCount} tiles started")
+    }
+
+    private fun cancelDownload() {
+        download?.cancel()
+        readout.text = "region cancelled"
+        Log.i(TAG, "region cancelled")
+    }
+
+    private fun deleteRegion() {
+        map.deleteRegion(REGION_NAME)
+        readout.text = "region deleted"
+        Log.i(TAG, "region deleted")
+        showRegionState()
+    }
+
+    private fun savedRegion(): OfflineRegion? = map.regions().firstOrNull { it.name == REGION_NAME }
+
+    /** The button says what tapping it will do, and the readout what is held. */
+    private fun showRegionState() {
+        val saved = savedRegion()
+        downloadButton.text = when {
+            download != null -> getString(R.string.region_cancel)
+            saved != null -> getString(R.string.region_delete)
+            else -> getString(R.string.region_save)
+        }
+        if (download == null && saved != null) {
+            readout.text = "region: ${saved.tileCount} tiles, ${megabytes(saved.sizeBytes)}, " +
+                "cache ${megabytes(map.diskCacheBytes)}"
+        }
+    }
+
+    private fun megabytes(bytes: Long): String = "%.1f MB".format(bytes / 1024.0 / 1024.0)
 
     /** Walks simulated fixes along [DEMO_ROUTE], driving the dot and navigation. */
     private fun startWalk() {

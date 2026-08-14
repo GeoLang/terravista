@@ -255,15 +255,20 @@ pub struct TileRange {
 
 impl TileRange {
     /// Iterate all tile coordinates in this range.
-    pub fn iter(&self) -> impl Iterator<Item = TileCoord> + '_ {
+    pub fn iter(self) -> impl Iterator<Item = TileCoord> {
         (self.y_min..=self.y_max).flat_map(move |y| {
             (self.x_min..=self.x_max).map(move |x| TileCoord::new(self.zoom, x, y))
         })
     }
 
     /// Total number of tiles in this range.
-    pub fn count(&self) -> u32 {
-        (self.x_max - self.x_min + 1) * (self.y_max - self.y_min + 1)
+    ///
+    /// A whole world of tiles overflows a `u32` past zoom 15, so this counts in
+    /// `u64`.
+    pub fn count(self) -> u64 {
+        let width = u64::from(self.x_max.saturating_sub(self.x_min)) + 1;
+        let height = u64::from(self.y_max.saturating_sub(self.y_min)) + 1;
+        width * height
     }
 }
 

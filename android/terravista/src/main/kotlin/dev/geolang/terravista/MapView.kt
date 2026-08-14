@@ -13,7 +13,9 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 
 /**
@@ -47,6 +49,10 @@ class MapView @JvmOverloads constructor(
         const val MAX_PARENT_LEVELS = 4
         const val FETCH_THREADS = 4
         const val DEFAULT_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
+        const val TILE_CACHE_DIR = "terravista-tiles"
+        const val REGION_DIR = "terravista-regions"
+        const val DEFAULT_DISK_CACHE_BYTES = 512L * 1024 * 1024
     }
 
     /** The core is not thread safe, so every native call happens under this. */
@@ -59,6 +65,20 @@ class MapView @JvmOverloads constructor(
     private val inFlight: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private val vectorInFlight: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private val tiles = TileFetcher()
+
+    private val tileStore = TileStore(
+        File(context.applicationContext.cacheDir, TILE_CACHE_DIR),
+        DEFAULT_DISK_CACHE_BYTES,
+    )
+    private val regionStore = RegionStore(
+        File(context.applicationContext.filesDir, REGION_DIR),
+        tiles,
+    )
+    private val downloads = CopyOnWriteArrayList<RegionDownload>()
+
+    /** Which disk directory each source's tiles live in. */
+    private var rasterSource = sourceKey(DEFAULT_TILE_URL)
+    private var vectorSource: String? = null
 
     private val decoded = object : LinkedHashMap<Long, Bitmap>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Bitmap>?): Boolean =
@@ -73,6 +93,7 @@ class MapView @JvmOverloads constructor(
     private val dst = RectF()
     private val src = Rect()
     private val locationOut = DoubleArray(4)
+    private val boundsOut = DoubleArray(4)
     private val pointXY = FloatArray(2)
     private val navCounts = IntArray(3)
     private val navDistances = DoubleArray(2)
@@ -124,6 +145,7 @@ class MapView @JvmOverloads constructor(
     var tileUrlTemplate: String = DEFAULT_TILE_URL
         set(value) {
             field = value
+            rasterSource = sourceKey(value)
             synchronized(sdk) {
                 if (handle == 0L) return@synchronized
                 TerraVistaNative.setTileUrl(handle, value)
@@ -145,6 +167,7 @@ class MapView @JvmOverloads constructor(
     var vectorTileUrlTemplate: String? = null
         set(value) {
             field = value
+            vectorSource = value?.let { sourceKey(it) }
             synchronized(sdk) {
                 if (handle == 0L) return@synchronized
                 TerraVistaNative.setVectorTileUrl(handle, value ?: "")
@@ -219,6 +242,18 @@ class MapView @JvmOverloads constructor(
     val cameraPosition: CameraPosition
         get() = synchronized(sdk) { readCameraLocked() }
 
+    /**
+     * The box the map is currently showing, or null before it has been laid
+     * out. This is what to hand [downloadRegion] to save the current view.
+     */
+    val visibleBounds: VisibleBounds?
+        get() = synchronized(sdk) {
+            if (handle == 0L || !TerraVistaNative.visibleBounds(handle, boundsOut)) {
+                return null
+            }
+            VisibleBounds(boundsOut[0], boundsOut[1], boundsOut[2], boundsOut[3])
+        }
+
     var onCameraChangeListener: OnCameraChangeListener? = null
 
     /** Move the map so this coordinate sits at the centre of the view. */
@@ -228,6 +263,151 @@ class MapView @JvmOverloads constructor(
             TerraVistaNative.setCenter(handle, latitude, longitude)
         }
         onCameraMoved()
+    }
+
+    // ── Offline ──────────────────────────────────────────────────────────────
+
+    /**
+     * Cap on the ambient tile cache, 512 MB by default.
+     *
+     * Every tile the map fetches is written to the app's cache directory and
+     * read from there before the network, so a route walked once draws again
+     * with no signal. Tiles never expire, so a source that redraws its imagery
+     * keeps serving the old one until that tile is evicted. The system may
+     * delete the whole cache when it needs the space; use a region for tiles
+     * that have to survive that.
+     */
+    var diskCacheSizeBytes: Long = DEFAULT_DISK_CACHE_BYTES
+        set(value) {
+            field = value
+            tileStore.maxBytes = value
+        }
+
+    /**
+     * Bytes the ambient cache is holding.
+     *
+     * Walks the cache directory the first time it is read, so keep it off the
+     * main thread if the cache may be large.
+     */
+    val diskCacheBytes: Long
+        get() = tileStore.sizeBytes()
+
+    /** What a region would cost, without downloading anything. */
+    fun estimateRegion(
+        minLatitude: Double,
+        minLongitude: Double,
+        maxLatitude: Double,
+        maxLongitude: Double,
+        minZoom: Int,
+        maxZoom: Int,
+    ): RegionEstimate {
+        val sources = if (vectorTileUrlTemplate == null) 1 else 2
+        val tiles = TerraVistaNative.regionTileCount(
+            minLatitude, minLongitude, maxLatitude, maxLongitude, minZoom, maxZoom,
+        ) * sources
+        val bytes = TerraVistaNative.regionEstimatedBytes(
+            minLatitude, minLongitude, maxLatitude, maxLongitude, minZoom, maxZoom,
+        ) * sources
+        return RegionEstimate(tiles, bytes)
+    }
+
+    /**
+     * Download a region and keep it on disk under [name], replacing any region
+     * of that name.
+     *
+     * Covers the current [tileUrlTemplate], and [vectorTileUrlTemplate] too
+     * when one is set. Region tiles are read before the ambient cache and are
+     * never evicted; [deleteRegion] is the only way they go.
+     *
+     * Downloading is a background job: [listener] reports progress on the main
+     * thread and the returned handle cancels it. Throws
+     * [IllegalArgumentException] for a region covering nothing or more than
+     * [MAX_REGION_TILES] tiles, which is where a polite client stops: public
+     * tile servers forbid bulk downloading, so check [estimateRegion] and offer
+     * a smaller area rather than raising the limit.
+     */
+    fun downloadRegion(
+        name: String,
+        minLatitude: Double,
+        minLongitude: Double,
+        maxLatitude: Double,
+        maxLongitude: Double,
+        minZoom: Int,
+        maxZoom: Int,
+        listener: RegionDownloadListener? = null,
+    ): RegionDownload {
+        val estimate = estimateRegion(
+            minLatitude, minLongitude, maxLatitude, maxLongitude, minZoom, maxZoom,
+        )
+        require(estimate.tileCount > 0) { "region \"$name\" covers no tiles" }
+        require(estimate.tileCount <= MAX_REGION_TILES) {
+            "region \"$name\" is ${estimate.tileCount} tiles, over the $MAX_REGION_TILES limit"
+        }
+
+        val region = OfflineRegion(
+            name = name,
+            minLatitude = minLatitude,
+            minLongitude = minLongitude,
+            maxLatitude = maxLatitude,
+            maxLongitude = maxLongitude,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            tileCount = 0,
+            sizeBytes = 0,
+        )
+        val download = RegionDownload()
+        downloads.add(download)
+        Thread({
+            regionStore.download(region, planRegionTiles(region), download, listener)
+            downloads.remove(download)
+            postInvalidate()
+        }, "terravista-region").start()
+        return download
+    }
+
+    /** Regions held on disk, with what each is holding. */
+    fun regions(): List<OfflineRegion> = regionStore.regions()
+
+    /** Delete a region and free its tiles. False when there was no such region. */
+    fun deleteRegion(name: String): Boolean {
+        val deleted = regionStore.delete(name)
+        if (deleted) invalidate()
+        return deleted
+    }
+
+    /** The region's tiles and where each comes from, from the core's enumerator. */
+    private fun planRegionTiles(region: OfflineRegion): List<RegionTile> {
+        val vectorSource = this.vectorSource
+        val zxy = IntArray(3)
+        val planned = ArrayList<RegionTile>()
+
+        synchronized(sdk) {
+            if (handle == 0L) return emptyList()
+            val count = TerraVistaNative.regionPlan(
+                handle,
+                region.minLatitude,
+                region.minLongitude,
+                region.maxLatitude,
+                region.maxLongitude,
+                region.minZoom,
+                region.maxZoom,
+            )
+            for (i in 0 until count) {
+                if (!TerraVistaNative.regionTileAt(handle, i, zxy)) continue
+                val (z, x, y) = Triple(zxy[0], zxy[1], zxy[2])
+                TerraVistaNative.tileUrl(handle, z, x, y)?.let {
+                    planned.add(RegionTile(rasterSource, z, x, y, it))
+                }
+                if (vectorSource != null) {
+                    TerraVistaNative.vectorTileUrl(handle, z, x, y)?.let {
+                        planned.add(RegionTile(vectorSource, z, x, y, it))
+                    }
+                }
+            }
+            // the plan is a copy in the core, and the tasks are the copy that matters
+            TerraVistaNative.regionClear(handle)
+        }
+        return planned
     }
 
     // ── Location & navigation ────────────────────────────────────────────────
@@ -342,6 +522,7 @@ class MapView @JvmOverloads constructor(
 
     /** Free the native map. Idempotent, and the view draws nothing afterwards. */
     fun destroy() {
+        for (download in downloads) download.cancel()
         fetchers.shutdownNow()
         synchronized(sdk) {
             if (handle != 0L) {
@@ -671,7 +852,7 @@ class MapView @JvmOverloads constructor(
 
         fetchers.submit {
             try {
-                val body = tiles.get(url)
+                val body = loadTile(rasterSource, url, z, x, y)
                 if (body != null) {
                     synchronized(sdk) {
                         if (handle != 0L) {
@@ -688,6 +869,19 @@ class MapView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * A tile from the nearest place that has it: a downloaded region first,
+     * then the ambient cache, then the network, which fills the cache on the
+     * way back.
+     */
+    private fun loadTile(source: String, url: String, z: Int, x: Int, y: Int): ByteArray? {
+        regionStore.read(source, z, x, y)?.let { return it }
+        tileStore.read(source, z, x, y)?.let { return it }
+        val body = tiles.get(url) ?: return null
+        tileStore.write(source, z, x, y, body)
+        return body
+    }
+
     private fun requestVectorTile(z: Int, x: Int, y: Int, key: Long) {
         val held = synchronized(sdk) {
             handle == 0L || TerraVistaNative.vectorCacheHas(handle, z, x, y)
@@ -697,14 +891,15 @@ class MapView @JvmOverloads constructor(
         val url = synchronized(sdk) {
             if (handle == 0L) null else TerraVistaNative.vectorTileUrl(handle, z, x, y)
         }
-        if (url.isNullOrEmpty() || fetchers.isShutdown) {
+        val source = vectorSource
+        if (url.isNullOrEmpty() || source == null || fetchers.isShutdown) {
             vectorInFlight.remove(key)
             return
         }
 
         fetchers.submit {
             try {
-                val body = tiles.get(url)
+                val body = loadTile(source, url, z, x, y)
                 if (body != null) {
                     val ok = synchronized(sdk) {
                         handle != 0L && TerraVistaNative.vectorCachePut(handle, z, x, y, body)

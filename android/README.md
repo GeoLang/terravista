@@ -69,6 +69,11 @@ class MainActivity : Activity() {
 | `vectorTileUrlTemplate` | XYZ template for MVT tiles, null for none |
 | `setLayerStyle(name, fill, stroke, width)` | how one vector layer draws |
 | `visibleVectorLayers` | layer names in the last drawn vector frame |
+| `visibleBounds` | the box the map is showing |
+| `diskCacheSizeBytes` / `diskCacheBytes` | ambient tile cache cap and current size |
+| `estimateRegion(...)` | tiles and bytes a region would cost |
+| `downloadRegion(name, ..., listener)` | save a region to disk |
+| `regions()` / `deleteRegion(name)` | list and delete saved regions |
 | `onCameraChangeListener` | fires on every camera move |
 | `destroy()` | free the native map, idempotent |
 
@@ -110,6 +115,58 @@ transparent fill leaves a polygon as an outline. The stroke width is in device
 pixels. A layer name the source does not serve is kept anyway, ready for a
 source that serves it. `visibleVectorLayers` lists the layer names the last
 drawn frame held, which is how to find out what a source actually calls things.
+
+## Offline
+
+Every tile the map fetches is written to disk and read before the network, so a
+map that has been looked at once draws again with no signal. The cache lives
+under the app's `cacheDir`, keyed by tile source and coordinate, so switching
+basemaps never serves the wrong imagery and several sources coexist. It evicts
+least recently read against a 512 MB cap:
+
+```kotlin
+map.diskCacheSizeBytes = 128L * 1024 * 1024
+```
+
+Tiles never expire and are never revalidated, so a source that redraws its
+imagery keeps serving the old tiles until they are evicted. The system may also
+delete the whole cache when it needs the space, which is the point of putting it
+in `cacheDir`: nothing there is worth keeping at the user's expense.
+
+For tiles that have to survive that, save a region:
+
+```kotlin
+val bounds = map.visibleBounds ?: return
+val zoom = map.cameraPosition.zoom.toInt()
+
+val estimate = map.estimateRegion(
+    bounds.minLatitude, bounds.minLongitude,
+    bounds.maxLatitude, bounds.maxLongitude,
+    zoom, zoom + 2,
+)
+if (estimate.tileCount > MAX_REGION_TILES) return
+
+val download = map.downloadRegion(
+    "home", bounds.minLatitude, bounds.minLongitude,
+    bounds.maxLatitude, bounds.maxLongitude, zoom, zoom + 2,
+    object : RegionDownloadListener {
+        override fun onProgress(completed: Int, failed: Int, total: Int) = Unit
+        override fun onFinished(region: OfflineRegion?) = Unit
+    },
+)
+```
+
+A region covers the current `tileUrlTemplate`, and `vectorTileUrlTemplate` too
+when one is set. Its tiles are read before the ambient cache and never evict, so
+`deleteRegion(name)` is the only way they go. `download.cancel()` stops a
+download and keeps whatever it already wrote; the listener is called on the main
+thread.
+
+A region is capped at 10,000 tiles (`MAX_REGION_TILES`), and `downloadRegion`
+throws `IllegalArgumentException` above that. Public tile servers, OpenStreetMap
+included, [forbid bulk downloading](https://operations.osmfoundation.org/policies/tiles/),
+so ask `estimateRegion` first and offer a smaller area rather than raising the
+limit or looping over smaller boxes.
 
 ## Tile sources
 

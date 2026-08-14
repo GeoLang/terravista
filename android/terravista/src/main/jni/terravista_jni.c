@@ -59,6 +59,19 @@ typedef struct {
 } TvNavProgress;
 
 typedef struct {
+    uint8_t z;
+    uint32_t x;
+    uint32_t y;
+} TvTileCoordinate;
+
+typedef struct {
+    double min_lat;
+    double min_lon;
+    double max_lat;
+    double max_lon;
+} TvBounds;
+
+typedef struct {
     int32_t kind;
     uint32_t layer_index;
     uint32_t ring_offset;
@@ -83,6 +96,7 @@ extern double tv_map_get_bearing(const TvMapState *state);
 extern double tv_map_get_pitch(const TvMapState *state);
 extern void tv_map_set_tile_url(TvMapState *state, const char *url);
 extern bool tv_map_tile_range(const TvMapState *state, TvTileRange *out);
+extern bool tv_map_visible_bounds(const TvMapState *state, TvBounds *out);
 extern uint32_t tv_map_visible_tile_count(TvMapState *state);
 extern bool tv_map_visible_tile_at(const TvMapState *state, uint32_t index, TvTilePlacement *out);
 extern int32_t tv_map_touch(TvMapState *state, int32_t phase, const double *xs, const double *ys,
@@ -124,6 +138,14 @@ extern bool tv_map_vector_feature_at(const TvMapState *state, uint32_t index,
                                      TvVectorFeature *out);
 extern size_t tv_map_vector_coords(const TvMapState *state, float *out, size_t cap);
 extern size_t tv_map_vector_rings(const TvMapState *state, uint32_t *out, size_t cap);
+extern uint64_t tv_region_tile_count(double min_lat, double min_lon, double max_lat, double max_lon,
+                                     uint8_t min_zoom, uint8_t max_zoom);
+extern uint64_t tv_region_estimated_bytes(double min_lat, double min_lon, double max_lat,
+                                          double max_lon, uint8_t min_zoom, uint8_t max_zoom);
+extern uint32_t tv_region_plan(TvMapState *state, double min_lat, double min_lon, double max_lat,
+                               double max_lon, uint8_t min_zoom, uint8_t max_zoom);
+extern bool tv_region_tile_at(const TvMapState *state, uint32_t index, TvTileCoordinate *out);
+extern void tv_region_clear(TvMapState *state);
 extern uint32_t tv_map_vector_layer_count(const TvMapState *state);
 extern char *tv_map_vector_layer_name(const TvMapState *state, uint32_t index);
 extern bool tv_map_set_layer_style(TvMapState *state, const char *layer_name, uint32_t fill_argb,
@@ -225,6 +247,18 @@ JNIEXPORT jboolean JNICALL FN(tileRange)(JNIEnv *env, jclass c, jlong h, jintArr
     }
     jint vals[5] = {r.zoom, (jint)r.x_min, (jint)r.x_max, (jint)r.y_min, (jint)r.y_max};
     (*env)->SetIntArrayRegion(env, out, 0, 5, vals);
+    return JNI_TRUE;
+}
+
+// out = {min_lat, min_lon, max_lat, max_lon}
+JNIEXPORT jboolean JNICALL FN(visibleBounds)(JNIEnv *env, jclass c, jlong h, jdoubleArray out) {
+    (void)c;
+    TvBounds b;
+    if ((*env)->GetArrayLength(env, out) < 4 || !tv_map_visible_bounds(STATE(h), &b)) {
+        return JNI_FALSE;
+    }
+    jdouble vals[4] = {b.min_lat, b.min_lon, b.max_lat, b.max_lon};
+    (*env)->SetDoubleArrayRegion(env, out, 0, 4, vals);
     return JNI_TRUE;
 }
 
@@ -615,6 +649,53 @@ JNIEXPORT jint JNICALL FN(vectorRings)(JNIEnv *env, jclass c, jlong h, jintArray
     size_t len = tv_map_vector_rings(STATE(h), (uint32_t *)buf, (size_t)cap);
     (*env)->ReleaseIntArrayElements(env, out, buf, 0);
     return (jint)len;
+}
+
+JNIEXPORT jlong JNICALL FN(regionTileCount)(JNIEnv *env, jclass c, jdouble minLat, jdouble minLon,
+                                            jdouble maxLat, jdouble maxLon, jint minZoom,
+                                            jint maxZoom) {
+    (void)env;
+    (void)c;
+    return (jlong)tv_region_tile_count(minLat, minLon, maxLat, maxLon, (uint8_t)minZoom,
+                                       (uint8_t)maxZoom);
+}
+
+JNIEXPORT jlong JNICALL FN(regionEstimatedBytes)(JNIEnv *env, jclass c, jdouble minLat,
+                                                 jdouble minLon, jdouble maxLat, jdouble maxLon,
+                                                 jint minZoom, jint maxZoom) {
+    (void)env;
+    (void)c;
+    return (jlong)tv_region_estimated_bytes(minLat, minLon, maxLat, maxLon, (uint8_t)minZoom,
+                                            (uint8_t)maxZoom);
+}
+
+JNIEXPORT jint JNICALL FN(regionPlan)(JNIEnv *env, jclass c, jlong h, jdouble minLat,
+                                      jdouble minLon, jdouble maxLat, jdouble maxLon, jint minZoom,
+                                      jint maxZoom) {
+    (void)env;
+    (void)c;
+    return (jint)tv_region_plan(STATE(h), minLat, minLon, maxLat, maxLon, (uint8_t)minZoom,
+                                (uint8_t)maxZoom);
+}
+
+// zxy = {z, x, y}
+JNIEXPORT jboolean JNICALL FN(regionTileAt)(JNIEnv *env, jclass c, jlong h, jint index,
+                                            jintArray zxy) {
+    (void)c;
+    TvTileCoordinate tile;
+    if ((*env)->GetArrayLength(env, zxy) < 3 ||
+        !tv_region_tile_at(STATE(h), (uint32_t)index, &tile)) {
+        return JNI_FALSE;
+    }
+    jint coords[3] = {tile.z, (jint)tile.x, (jint)tile.y};
+    (*env)->SetIntArrayRegion(env, zxy, 0, 3, coords);
+    return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL FN(regionClear)(JNIEnv *env, jclass c, jlong h) {
+    (void)env;
+    (void)c;
+    tv_region_clear(STATE(h));
 }
 
 JNIEXPORT jdouble JNICALL FN(distanceBetween)(JNIEnv *env, jclass c, jdouble lat1, jdouble lon1,
