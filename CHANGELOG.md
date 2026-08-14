@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-13
+
+- MVT decoding in the core: layers, features, points, lines, polygons and
+  attributes, with ring winding deciding holes so multipolygons keep their
+  parts. No new dependency, the decoder reads the protobuf itself.
+- Vector tiles render: `renderer::vector_tile_commands` turns a decoded tile
+  and its placement into `DrawVectorLayer` commands in screen coordinates,
+  with a fixed look per layer name. No style spec, no labels, no fonts.
+- C FFI grown from 41 to 50 symbols: a vector tile source with its own URL
+  template and cache, and a per-frame geometry readback (features, ring
+  lengths, coordinates).
+- Android: `MapView.vectorTileUrlTemplate` (and the `tvVectorTileUrlTemplate`
+  XML attribute) fetches, decodes and draws vector tiles over the raster ones.
+
 ## [0.3.0] - 2026-07-29
 
 - Turn-by-turn navigation in the Android SDK: `MapView.startNavigation(Route)`,

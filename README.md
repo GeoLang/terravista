@@ -25,6 +25,7 @@ cannot fetch or draw a tile on its own.
 - Camera and viewport: Web Mercator projection, zoom, bearing, pitch, visible bounds, tile range
 - Gesture recognition: pan, and a two-finger pinch that zooms and rotates together
 - Tile cache: in-memory LRU keyed by tile coordinate, with XYZ URL template building
+- MVT decoding: layers, features, geometry and attributes, straight to screen-space draw commands
 - Offline vector store: in-memory feature CRUD with sync status tracking
 - Style engine: parses Mapbox GL style JSON and interpolates properties by zoom
 - Turn-by-turn navigation over a pre-computed route
@@ -36,12 +37,12 @@ cannot fetch or draw a tile on its own.
 **What the host app must supply**
 
 - **HTTP tile fetching.** TerraVista builds tile URLs, it does not request them. There is no HTTP client in the dependency tree.
-- **MVT decoding.** Nothing decodes Mapbox Vector Tiles. The cache stores opaque bytes and the renderer expects features you have already decoded.
 - **GPU rendering.** The renderer emits `RenderCommand` objects. Executing them against Metal or Vulkan is the platform layer's job. No shaders ship here.
 - **Routing.** The navigator tracks progress along a route you computed elsewhere, for example with [Itinera](https://github.com/GeoLang/itinera).
 - **GPS.** `LocationProvider` is a trait for the platform to implement.
 
-HTTP fetching and MVT decoding are targeted for v0.2, the rendering backends for v0.3. See the [Roadmap](#roadmap).
+HTTP fetching is the host's, and the Android library does it for you. The GPU
+rendering backends are targeted for v0.3. See the [Roadmap](#roadmap).
 
 ---
 
@@ -106,6 +107,14 @@ so that waits for the GPU backends in v0.3.
 - URL template system (`{z}/{x}/{y}` substitution), building only, the host does the request
 - Tile metadata tracking (format, size, timestamps)
 
+### 🧬 Vector Tiles
+
+- MVT spec v2 decoding: layers, features, points, lines, polygons and attributes
+- Ring winding decides holes, so a multipolygon keeps its parts
+- Coordinates stay in tile units, so placing a tile is a scale and a translate
+- A fixed default look per layer name, no style spec, no labels and no fonts
+- Vector tiles cache and draw alongside raster ones, from their own URL template
+
 ### 🔄 Offline Vector Store
 
 - On-device feature CRUD with GeoJSON geometry
@@ -168,7 +177,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (107 tests)
+# Run tests (136 tests)
 cargo test
 
 # Lint
@@ -216,7 +225,9 @@ cargo build --target x86_64-linux-android -p terravista-ffi --release
 
 All functions use the `tv_` prefix and follow C naming conventions. Opaque pointers must be freed with their corresponding `_destroy` function.
 
-The FFI covers map state and camera math. There is no `tv_` call that fetches or draws a tile, because neither exists yet.
+The FFI covers map state, camera math, and the geometry of a frame. No `tv_` call
+fetches a tile or draws one: the host does both, from the URLs and the placements
+the SDK gives it.
 
 ### Map Lifecycle
 
@@ -298,6 +309,41 @@ uint32_t tv_cache_tile_count(const TvMapState* state);
 uint64_t tv_cache_size_bytes(const TvMapState* state);
 void tv_cache_clear(TvMapState* state);
 ```
+
+### Vector Tiles
+
+```c
+void tv_map_set_vector_tile_url(TvMapState* state, const char* url_template);
+char* tv_map_vector_tile_url(const TvMapState* state, uint8_t z, uint32_t x, uint32_t y);
+
+// Decodes on the way in, so false means the bytes were not a vector tile.
+bool tv_vector_cache_put(TvMapState* state, uint8_t z, uint32_t x, uint32_t y,
+                         const uint8_t* bytes, size_t len);
+bool tv_vector_cache_has(const TvMapState* state, uint8_t z, uint32_t x, uint32_t y);
+void tv_vector_cache_clear(TvMapState* state);
+
+typedef struct {
+    int32_t kind;            // TV_VECTOR_POINT, _LINE, _POLYGON
+    uint32_t ring_offset, ring_count, coord_offset;
+    uint32_t fill_argb, stroke_argb;  // 0xAARRGGBB, alpha 0 means do not paint
+    float stroke_width, point_radius;
+} TvVectorFeature;
+
+// Recompute the frame's vector geometry, then read it back.
+uint32_t tv_map_vector_frame(TvMapState* state);
+bool tv_map_vector_feature_at(const TvMapState* state, uint32_t i, TvVectorFeature* out);
+size_t tv_map_vector_coords(const TvMapState* state, float* out, size_t cap);
+size_t tv_map_vector_rings(const TvMapState* state, uint32_t* out, size_t cap);
+```
+
+A feature's geometry is a run of rings. `tv_map_vector_rings` gives each ring's
+point count and `tv_map_vector_coords` gives every point as an x and a y, in the
+same device pixels as the tile placements. A point is one ring of one point, a
+line is one ring, and a polygon's first ring is its exterior and the rest are
+holes. Both readers fill as much as `cap` allows and return the full length.
+
+Vector tiles are a second source: they cache and draw alongside the raster ones,
+each with its own URL template.
 
 ### Utility
 
@@ -391,8 +437,8 @@ class MapView(context: Context) : View(context) {
 
 ## Roadmap
 
-- [ ] **v0.2** — HTTP tile fetching (async runtime integration)
-- [ ] **v0.2** — MVT (Mapbox Vector Tile) decoding
+- [x] **v0.2** — HTTP tile fetching, in the Android library
+- [x] **v0.2** — MVT (Mapbox Vector Tile) decoding
 - [ ] **v0.3** — Metal rendering backend (iOS)
 - [ ] **v0.3** — Vulkan rendering backend (Android)
 - [ ] **v0.4** — Annotation layers (markers, polylines, polygons)

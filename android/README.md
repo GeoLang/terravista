@@ -1,7 +1,8 @@
 # TerraVista for Android
 
 A drop-in map view. Add the dependency, put `MapView` in a layout, and you get a
-pannable, pinch-zoomable, rotatable raster map. No Rust, no JNI, no NDK.
+pannable, pinch-zoomable, rotatable map, raster tiles or vector. No Rust, no JNI,
+no NDK.
 
 <img src="docs/sample.png" width="320" alt="The sample app showing OpenStreetMap tiles over London" />
 
@@ -65,14 +66,31 @@ class MainActivity : Activity() {
 | `bearing` | rotation in degrees, 0 is north up |
 | `minZoom` / `maxZoom` | zoom limits, default 0 and 18 |
 | `tileUrlTemplate` | XYZ template, default OpenStreetMap |
+| `vectorTileUrlTemplate` | XYZ template for MVT tiles, null for none |
 | `onCameraChangeListener` | fires on every camera move |
 | `destroy()` | free the native map, idempotent |
 
 XML attributes mirror these: `tvCenterLatitude`, `tvCenterLongitude`, `tvZoom`,
-`tvBearing`, `tvMinZoom`, `tvMaxZoom`, `tvTileUrlTemplate`.
+`tvBearing`, `tvMinZoom`, `tvMaxZoom`, `tvTileUrlTemplate`,
+`tvVectorTileUrlTemplate`.
 
 Changing `tileUrlTemplate` drops every cached tile, because the cache is keyed by
 tile coordinate alone and would otherwise serve the old basemap's images.
+
+## Vector tiles
+
+Point `vectorTileUrlTemplate` at an MVT source and its tiles are fetched,
+decoded and drawn over the raster ones:
+
+```kotlin
+map.vectorTileUrlTemplate = "https://tiles.example.com/{z}/{x}/{y}.mvt"
+```
+
+Features get a fixed look per layer name, matching the layer names
+OpenMapTiles-style sources use (`water`, `landcover`, `building`,
+`transportation`, `boundary`). There is no style spec, no filters and no labels,
+so a source with other layer names still draws, in the fallback colour. Set the
+property to null to turn the source off, which drops its tiles.
 
 ## Tile sources
 
