@@ -8,5 +8,6 @@
         <attr name="tvMinZoom" format="float" />
         <attr name="tvMaxZoom" format="float" />
         <attr name="tvTileUrlTemplate" format="string" />
+        <attr name="tvVectorTileUrlTemplate" format="string" />
     </declare-styleable>
 </resources>

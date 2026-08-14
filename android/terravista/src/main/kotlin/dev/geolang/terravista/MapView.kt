@@ -57,6 +57,7 @@ class MapView @JvmOverloads constructor(
 
     private val fetchers = Executors.newFixedThreadPool(FETCH_THREADS)
     private val inFlight: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+    private val vectorInFlight: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private val tiles = TileFetcher()
 
     private val decoded = object : LinkedHashMap<Long, Bitmap>(16, 0.75f, true) {
@@ -75,6 +76,19 @@ class MapView @JvmOverloads constructor(
     private val pointXY = FloatArray(2)
     private val navCounts = IntArray(3)
     private val navDistances = DoubleArray(2)
+
+    // one frame's vector geometry, grown to fit and reused
+    private val vectorFeature = IntArray(6)
+    private val vectorPaintValues = FloatArray(2)
+    private var vectorCoords = FloatArray(0)
+    private var vectorRings = IntArray(0)
+    private val vectorPath = Path()
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+    }
 
     private val accuracyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(38, 66, 133, 244)
@@ -117,6 +131,26 @@ class MapView @JvmOverloads constructor(
             }
             inFlight.clear()
             decoded.clear()
+            invalidate()
+        }
+
+    /**
+     * XYZ template for a vector tile source, for example
+     * `https://tiles.example.com/{z}/{x}/{y}.mvt`, or null for none.
+     *
+     * Vector tiles draw over the raster ones, so a map can carry both. Features
+     * are drawn with a fixed default look per layer name; there is no style
+     * spec and no labels.
+     */
+    var vectorTileUrlTemplate: String? = null
+        set(value) {
+            field = value
+            synchronized(sdk) {
+                if (handle == 0L) return@synchronized
+                TerraVistaNative.setVectorTileUrl(handle, value ?: "")
+                TerraVistaNative.vectorCacheClear(handle)
+            }
+            vectorInFlight.clear()
             invalidate()
         }
 
@@ -287,6 +321,7 @@ class MapView @JvmOverloads constructor(
         var initialZoom = 2.0
         var initialBearing = 0.0
         var template = DEFAULT_TILE_URL
+        var vectorTemplate: String? = null
 
         if (attrs != null) {
             val a = context.obtainStyledAttributes(attrs, R.styleable.MapView)
@@ -298,6 +333,7 @@ class MapView @JvmOverloads constructor(
                 minZoom = a.getFloat(R.styleable.MapView_tvMinZoom, 0f).toDouble()
                 maxZoom = a.getFloat(R.styleable.MapView_tvMaxZoom, 18f).toDouble()
                 a.getString(R.styleable.MapView_tvTileUrlTemplate)?.let { template = it }
+                vectorTemplate = a.getString(R.styleable.MapView_tvVectorTileUrlTemplate)
             } finally {
                 a.recycle()
             }
@@ -309,8 +345,9 @@ class MapView @JvmOverloads constructor(
             TerraVistaNative.setZoom(handle, initialZoom.coerceIn(minZoom, maxZoom))
             TerraVistaNative.setBearing(handle, initialBearing)
         }
-        // through the setter, so the core and the property agree from the start
+        // through the setters, so the core and the properties agree from the start
         tileUrlTemplate = template
+        vectorTileUrlTemplate = vectorTemplate
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldW: Int, oldH: Int) {
@@ -417,11 +454,98 @@ class MapView @JvmOverloads constructor(
             } else {
                 drawParentTile(canvas, z, x, y)
             }
+
+            if (vectorTileUrlTemplate != null) requestVectorTile(z, x, y, key)
         }
 
+        drawVectorFeatures(canvas)
         drawUserLocation(canvas)
 
         canvas.restore()
+    }
+
+    /**
+     * Draw the decoded vector tiles the core placed for this frame.
+     *
+     * The core hands back flat arrays: one entry per feature, its geometry in
+     * a shared coordinate pool, split into rings.
+     */
+    private fun drawVectorFeatures(canvas: Canvas) {
+        if (vectorTileUrlTemplate == null) return
+
+        val count = synchronized(sdk) {
+            if (handle == 0L) 0 else TerraVistaNative.vectorFrame(handle)
+        }
+        if (count == 0) return
+
+        synchronized(sdk) {
+            if (handle == 0L) return
+            val coords = TerraVistaNative.vectorCoords(handle, vectorCoords)
+            if (coords > vectorCoords.size) {
+                vectorCoords = FloatArray(coords)
+                TerraVistaNative.vectorCoords(handle, vectorCoords)
+            }
+            val rings = TerraVistaNative.vectorRings(handle, vectorRings)
+            if (rings > vectorRings.size) {
+                vectorRings = IntArray(rings)
+                TerraVistaNative.vectorRings(handle, vectorRings)
+            }
+        }
+
+        for (i in 0 until count) {
+            val ok = synchronized(sdk) {
+                handle != 0L &&
+                    TerraVistaNative.vectorFeatureAt(handle, i, vectorFeature, vectorPaintValues)
+            }
+            if (ok) drawVectorFeature(canvas)
+        }
+    }
+
+    /** Draws whatever [vectorFeature] and [vectorPaintValues] currently hold. */
+    private fun drawVectorFeature(canvas: Canvas) {
+        val kind = vectorFeature[0]
+        val ringOffset = vectorFeature[1]
+        val ringCount = vectorFeature[2]
+        val fill = vectorFeature[4]
+        val stroke = vectorFeature[5]
+        val strokeWidth = vectorPaintValues[0]
+        var coord = vectorFeature[3]
+
+        if (coord + 2 > vectorCoords.size) return
+        fillPaint.color = fill
+        strokePaint.color = stroke
+        strokePaint.strokeWidth = strokeWidth
+
+        if (kind == TerraVistaNative.VECTOR_POINT) {
+            val radius = vectorPaintValues[1]
+            val x = vectorCoords[coord]
+            val y = vectorCoords[coord + 1]
+            if (Color.alpha(fill) > 0) canvas.drawCircle(x, y, radius, fillPaint)
+            if (Color.alpha(stroke) > 0 && strokeWidth > 0f) {
+                canvas.drawCircle(x, y, radius, strokePaint)
+            }
+            return
+        }
+
+        vectorPath.rewind()
+        vectorPath.fillType = Path.FillType.EVEN_ODD
+        for (r in 0 until ringCount) {
+            val points = vectorRings.getOrElse(ringOffset + r) { 0 }
+            if (points == 0 || coord + points * 2 > vectorCoords.size) return
+            vectorPath.moveTo(vectorCoords[coord], vectorCoords[coord + 1])
+            for (p in 1 until points) {
+                vectorPath.lineTo(vectorCoords[coord + p * 2], vectorCoords[coord + p * 2 + 1])
+            }
+            if (kind == TerraVistaNative.VECTOR_POLYGON) vectorPath.close()
+            coord += points * 2
+        }
+
+        if (kind == TerraVistaNative.VECTOR_POLYGON && Color.alpha(fill) > 0) {
+            canvas.drawPath(vectorPath, fillPaint)
+        }
+        if (Color.alpha(stroke) > 0 && strokeWidth > 0f) {
+            canvas.drawPath(vectorPath, strokePaint)
+        }
     }
 
     /** Draws in the same north-up frame as the tiles, so the canvas rotation applies. */
@@ -519,6 +643,37 @@ class MapView @JvmOverloads constructor(
                 Log.w(TAG, "tile $z/$x/$y failed: $e")
             } finally {
                 inFlight.remove(key)
+            }
+        }
+    }
+
+    private fun requestVectorTile(z: Int, x: Int, y: Int, key: Long) {
+        val held = synchronized(sdk) {
+            handle == 0L || TerraVistaNative.vectorCacheHas(handle, z, x, y)
+        }
+        if (held || !vectorInFlight.add(key)) return
+
+        val url = synchronized(sdk) {
+            if (handle == 0L) null else TerraVistaNative.vectorTileUrl(handle, z, x, y)
+        }
+        if (url.isNullOrEmpty() || fetchers.isShutdown) {
+            vectorInFlight.remove(key)
+            return
+        }
+
+        fetchers.submit {
+            try {
+                val body = tiles.get(url)
+                if (body != null) {
+                    val ok = synchronized(sdk) {
+                        handle != 0L && TerraVistaNative.vectorCachePut(handle, z, x, y, body)
+                    }
+                    if (ok) postInvalidate() else Log.w(TAG, "vector tile $z/$x/$y did not decode")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "vector tile $z/$x/$y failed: $e")
+            } finally {
+                vectorInFlight.remove(key)
             }
         }
     }

@@ -12,6 +12,7 @@
 //! - String pointers returned by the SDK are owned by the caller and must
 //!   be freed with `tv_string_free`.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,7 +20,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use terravista_core::camera::{Camera, TileCoord, Viewport};
 use terravista_core::gesture::{GestureRecognizer, GestureResult, TouchEvent, TouchPoint};
 use terravista_core::location::{Coordinate, TrackingMode};
-use terravista_core::renderer::{TilePlacement, visible_tiles};
+use terravista_core::mvt::{VectorTile, decode_tile};
+use terravista_core::renderer::{
+    RenderCommand, RenderFeature, RenderGeometry, TilePlacement, VectorStyle, vector_tile_commands,
+    visible_tiles,
+};
 use terravista_core::route::{Maneuver, NavStatus, NavigationUpdate, Navigator, Route, RouteStep};
 use terravista_core::tile_cache::{CacheConfig, TileCache, TileData, TileMeta};
 
@@ -36,6 +41,20 @@ pub struct TvMapState {
     navigator: Option<Navigator>,
     /// Last result of `tv_nav_update`, read back by `tv_nav_progress`.
     nav_last: Option<NavigationUpdate>,
+    vector: VectorState,
+}
+
+/// The vector tile source: raw tiles as fetched, their decoded form, and the
+/// flattened frame the host reads back.
+struct VectorState {
+    cache: TileCache,
+    style: VectorStyle,
+    decoded: HashMap<TileCoord, VectorTile>,
+    features: Vec<TvVectorFeature>,
+    /// x and y interleaved.
+    coords: Vec<f32>,
+    /// Point count per ring.
+    rings: Vec<u32>,
 }
 
 // ─── Map State ───────────────────────────────────────────────────────────────
@@ -57,6 +76,14 @@ pub extern "C" fn tv_map_create(
         user_location: None,
         navigator: None,
         nav_last: None,
+        vector: VectorState {
+            cache: TileCache::new(CacheConfig::default()),
+            style: VectorStyle::default(),
+            decoded: HashMap::new(),
+            features: Vec::new(),
+            coords: Vec::new(),
+            rings: Vec::new(),
+        },
     });
     Box::into_raw(state)
 }
@@ -534,6 +561,324 @@ pub unsafe extern "C" fn tv_cache_clear(state: *mut TvMapState) {
     if let Some(s) = unsafe { state.as_mut() } {
         s.tile_cache.clear();
     }
+}
+
+// ─── Vector Tiles ────────────────────────────────────────────────────────────
+
+/// Geometry kind in `TvVectorFeature`.
+pub const TV_VECTOR_POINT: i32 = 0;
+pub const TV_VECTOR_LINE: i32 = 1;
+pub const TV_VECTOR_POLYGON: i32 = 2;
+
+/// One feature of the frame built by `tv_map_vector_frame`.
+///
+/// `ring_offset` indexes the ring lengths from `tv_map_vector_rings` and
+/// `coord_offset` indexes the floats from `tv_map_vector_coords`, where each
+/// ring holds its point count and each point is an x and a y. A point feature
+/// is one ring of one point, a line is one ring, and a polygon's first ring is
+/// its exterior and the rest are holes. Colors are `0xAARRGGBB`, and an alpha
+/// of zero means do not paint.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TvVectorFeature {
+    /// One of the `TV_VECTOR_*` values.
+    pub kind: i32,
+    pub ring_offset: u32,
+    pub ring_count: u32,
+    pub coord_offset: u32,
+    pub fill_argb: u32,
+    pub stroke_argb: u32,
+    pub stroke_width: f32,
+    pub point_radius: f32,
+}
+
+fn argb(color: Option<[f32; 4]>) -> u32 {
+    let Some(color) = color else {
+        return 0;
+    };
+    let byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (byte(color[3]) << 24) | (byte(color[0]) << 16) | (byte(color[1]) << 8) | byte(color[2])
+}
+
+/// Point the vector source at a new URL template.
+///
+/// Vector tiles are cached and drawn separately from the raster tiles set with
+/// `tv_map_set_tile_url`, so a map can carry both. Changing the template drops
+/// the vector tiles held for the old one.
+///
+/// # Safety
+/// `state` and `url` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_set_vector_tile_url(state: *mut TvMapState, url: *const c_char) {
+    if state.is_null() || url.is_null() {
+        return;
+    }
+    let s = unsafe { &mut *state };
+    if let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() {
+        s.vector.cache.set_url_template(url.to_string());
+        s.vector.decoded.clear();
+    }
+}
+
+/// Build the vector tile URL for a coordinate from the configured template.
+///
+/// Returns a string the caller must free with `tv_string_free`, or null.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_tile_url(
+    state: *const TvMapState,
+    z: u8,
+    x: u32,
+    y: u32,
+) -> *mut c_char {
+    let Some(s) = (unsafe { state.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    match CString::new(s.vector.cache.tile_url(&TileCoord::new(z, x, y))) {
+        Ok(c) => c.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Store a fetched vector tile, decoding it on the way in.
+///
+/// Returns false on a null pointer or bytes that are not a vector tile, so the
+/// host can tell a bad response from a slow one.
+///
+/// # Safety
+/// `state` must be valid and `bytes` must point to at least `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_vector_cache_put(
+    state: *mut TvMapState,
+    z: u8,
+    x: u32,
+    y: u32,
+    bytes: *const u8,
+    len: usize,
+) -> bool {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return false;
+    };
+    if bytes.is_null() || len == 0 {
+        return false;
+    }
+    let data = unsafe { std::slice::from_raw_parts(bytes, len) };
+    let Ok(tile) = decode_tile(data) else {
+        return false;
+    };
+
+    let coord = TileCoord::new(z, x, y);
+    let fetched_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    s.vector.cache.insert(TileData {
+        meta: TileMeta {
+            coord,
+            size_bytes: len as u64,
+            fetched_at,
+            etag: None,
+            content_type: "application/vnd.mapbox-vector-tile".to_string(),
+        },
+        bytes: data.to_vec(),
+    });
+    s.vector.decoded.insert(coord, tile);
+    true
+}
+
+/// Whether a vector tile is held for this coordinate.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_vector_cache_has(
+    state: *const TvMapState,
+    z: u8,
+    x: u32,
+    y: u32,
+) -> bool {
+    unsafe { state.as_ref() }.is_some_and(|s| s.vector.cache.contains(&TileCoord::new(z, x, y)))
+}
+
+/// Drop every vector tile.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_vector_cache_clear(state: *mut TvMapState) {
+    if let Some(s) = unsafe { state.as_mut() } {
+        s.vector.cache.clear();
+        s.vector.decoded.clear();
+    }
+}
+
+/// Recompute the frame's vector geometry and return how many features it holds.
+///
+/// Call this once per frame, then read the features back with
+/// `tv_map_vector_feature_at` and their geometry with `tv_map_vector_coords`
+/// and `tv_map_vector_rings`. Screen positions match the raster placements from
+/// `tv_map_visible_tile_at`, so both draw in the same north-up frame.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_frame(state: *mut TvMapState) -> u32 {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return 0;
+    };
+    s.placements = visible_tiles(&s.camera, &s.viewport);
+    s.vector.features.clear();
+    s.vector.coords.clear();
+    s.vector.rings.clear();
+
+    let mut visible = HashMap::with_capacity(s.placements.len());
+    for placement in &s.placements {
+        let coord = placement.coord;
+        let tile = match s.vector.decoded.remove(&coord) {
+            Some(tile) => tile,
+            None => {
+                let Some(cached) = s.vector.cache.get(&coord) else {
+                    continue;
+                };
+                let Ok(tile) = decode_tile(&cached.bytes) else {
+                    continue;
+                };
+                tile
+            }
+        };
+
+        let commands = vector_tile_commands(&tile, placement, &s.vector.style);
+        for command in commands {
+            let RenderCommand::DrawVectorLayer { features, .. } = command else {
+                continue;
+            };
+            for feature in &features {
+                push_feature(&mut s.vector, feature);
+            }
+        }
+        visible.insert(coord, tile);
+    }
+
+    // holding only what the frame drew keeps decoded tiles bounded by the screen
+    s.vector.decoded = visible;
+    s.vector.features.len() as u32
+}
+
+fn push_feature(vector: &mut VectorState, feature: &RenderFeature) {
+    let ring_offset = vector.rings.len() as u32;
+    let coord_offset = vector.coords.len() as u32;
+    let mut push_ring = |points: &[[f32; 2]]| {
+        vector.rings.push(points.len() as u32);
+        for point in points {
+            vector.coords.push(point[0]);
+            vector.coords.push(point[1]);
+        }
+    };
+
+    let (kind, ring_count) = match &feature.geometry {
+        RenderGeometry::Point { x, y, .. } => {
+            push_ring(&[[*x, *y]]);
+            (TV_VECTOR_POINT, 1)
+        }
+        RenderGeometry::Line { points } => {
+            push_ring(points);
+            (TV_VECTOR_LINE, 1)
+        }
+        RenderGeometry::Polygon { exterior, holes } => {
+            push_ring(exterior);
+            for hole in holes {
+                push_ring(hole);
+            }
+            (TV_VECTOR_POLYGON, 1 + holes.len() as u32)
+        }
+    };
+
+    let radius = match feature.geometry {
+        RenderGeometry::Point { radius, .. } => radius,
+        _ => 0.0,
+    };
+
+    vector.features.push(TvVectorFeature {
+        kind,
+        ring_offset,
+        ring_count,
+        coord_offset,
+        fill_argb: argb(feature.fill_color),
+        stroke_argb: argb(feature.stroke_color),
+        stroke_width: feature.stroke_width,
+        point_radius: radius,
+    });
+}
+
+/// Read one feature from the set built by `tv_map_vector_frame`.
+///
+/// Returns false if the index is out of range or a pointer is null.
+///
+/// # Safety
+/// `state` and `out` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_feature_at(
+    state: *const TvMapState,
+    index: u32,
+    out: *mut TvVectorFeature,
+) -> bool {
+    let (Some(s), Some(out)) = (unsafe { state.as_ref() }, unsafe { out.as_mut() }) else {
+        return false;
+    };
+    let Some(feature) = s.vector.features.get(index as usize) else {
+        return false;
+    };
+    *out = *feature;
+    true
+}
+
+/// Copy the frame's coordinates into `out`, writing at most `cap` floats.
+///
+/// Returns the full float count, which may exceed `cap`.
+///
+/// # Safety
+/// `state` must be valid and `out` must point to at least `cap` floats, or be
+/// null when `cap` is 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_coords(
+    state: *const TvMapState,
+    out: *mut f32,
+    cap: usize,
+) -> usize {
+    let Some(s) = (unsafe { state.as_ref() }) else {
+        return 0;
+    };
+    unsafe { copy_out(&s.vector.coords, out, cap) }
+}
+
+/// Copy the frame's ring lengths, in points, into `out`.
+///
+/// Returns the full ring count, which may exceed `cap`.
+///
+/// # Safety
+/// `state` must be valid and `out` must point to at least `cap` elements, or be
+/// null when `cap` is 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_rings(
+    state: *const TvMapState,
+    out: *mut u32,
+    cap: usize,
+) -> usize {
+    let Some(s) = (unsafe { state.as_ref() }) else {
+        return 0;
+    };
+    unsafe { copy_out(&s.vector.rings, out, cap) }
+}
+
+/// # Safety
+/// `out` must point to at least `cap` elements, or be null when `cap` is 0.
+unsafe fn copy_out<T: Copy>(values: &[T], out: *mut T, cap: usize) -> usize {
+    let n = values.len().min(cap);
+    if n > 0 && !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), out, n) };
+    }
+    values.len()
 }
 
 // ─── Projection ──────────────────────────────────────────────────────────────
@@ -1259,6 +1604,231 @@ mod tests {
         assert!(!unsafe { tv_nav_progress(state, &mut out) });
         assert!(!unsafe { tv_nav_update(state, ROUTE[1].0, ROUTE[1].1, &mut out) });
         assert!(unsafe { tv_nav_instruction(state) }.is_null());
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// Encoded by the mapbox-vector-tile Python reference implementation.
+    const SAMPLE_TILE: &[u8] = include_bytes!("../../terravista-core/tests/fixtures/sample.mvt");
+
+    /// The first tile the current camera shows, and where it draws.
+    fn first_visible_tile(state: *mut TvMapState) -> TvTilePlacement {
+        assert!(unsafe { tv_map_visible_tile_count(state) } > 0);
+        let mut placement = TvTilePlacement {
+            z: 0,
+            x: 0,
+            y: 0,
+            screen_x: 0.0,
+            screen_y: 0.0,
+            size: 0.0,
+        };
+        assert!(unsafe { tv_map_visible_tile_at(state, 0, &mut placement) });
+        placement
+    }
+
+    fn feature_at(state: *mut TvMapState, index: u32) -> Option<TvVectorFeature> {
+        let mut feature = TvVectorFeature {
+            kind: -1,
+            ring_offset: 0,
+            ring_count: 0,
+            coord_offset: 0,
+            fill_argb: 0,
+            stroke_argb: 0,
+            stroke_width: 0.0,
+            point_radius: 0.0,
+        };
+        unsafe { tv_map_vector_feature_at(state, index, &mut feature) }.then_some(feature)
+    }
+
+    /// Copy the frame's coordinates out, sized by the probe the ABI promises.
+    fn frame_coords(state: *mut TvMapState) -> Vec<f32> {
+        let len = unsafe { tv_map_vector_coords(state, std::ptr::null_mut(), 0) };
+        let mut out = vec![0.0; len];
+        assert_eq!(
+            unsafe { tv_map_vector_coords(state, out.as_mut_ptr(), len) },
+            len
+        );
+        out
+    }
+
+    fn frame_rings(state: *mut TvMapState) -> Vec<u32> {
+        let len = unsafe { tv_map_vector_rings(state, std::ptr::null_mut(), 0) };
+        let mut out = vec![0; len];
+        assert_eq!(
+            unsafe { tv_map_vector_rings(state, out.as_mut_ptr(), len) },
+            len
+        );
+        out
+    }
+
+    fn put_sample_tile(state: *mut TvMapState, placement: &TvTilePlacement) -> bool {
+        unsafe {
+            tv_vector_cache_put(
+                state,
+                placement.z,
+                placement.x,
+                placement.y,
+                SAMPLE_TILE.as_ptr(),
+                SAMPLE_TILE.len(),
+            )
+        }
+    }
+
+    /// The vector source is a second source, not a replacement: both templates
+    /// answer, and each keeps its own tiles.
+    #[test]
+    fn test_vector_url_template_is_separate_from_the_raster_one() {
+        let state = map();
+        let raster = CString::new("https://raster.example.com/{z}/{x}/{y}.png").unwrap();
+        let vector = CString::new("https://vector.example.com/{z}/{x}/{y}.mvt").unwrap();
+        unsafe {
+            tv_map_set_tile_url(state, raster.as_ptr());
+            tv_map_set_vector_tile_url(state, vector.as_ptr());
+        }
+
+        assert_eq!(
+            take_string(unsafe { tv_map_tile_url(state, 14, 8192, 5450) }).as_deref(),
+            Some("https://raster.example.com/14/8192/5450.png")
+        );
+        assert_eq!(
+            take_string(unsafe { tv_map_vector_tile_url(state, 14, 8192, 5450) }).as_deref(),
+            Some("https://vector.example.com/14/8192/5450.mvt")
+        );
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_vector_put_rejects_bytes_that_are_not_a_tile() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        let junk = [0xFFu8, 0xFF, 0xFF, 0xFF];
+        assert!(!unsafe {
+            tv_vector_cache_put(
+                state,
+                placement.z,
+                placement.x,
+                placement.y,
+                junk.as_ptr(),
+                junk.len(),
+            )
+        });
+        assert!(!unsafe { tv_vector_cache_put(state, 0, 0, 0, std::ptr::null(), 0) });
+        assert!(!unsafe { tv_vector_cache_has(state, placement.z, placement.x, placement.y) });
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// A tile put into the cache draws inside the quad the raster placement
+    /// gives for the same coordinate.
+    #[test]
+    fn test_vector_frame_places_features_inside_the_tile() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        assert!(unsafe { tv_vector_cache_has(state, placement.z, placement.x, placement.y) });
+
+        let count = unsafe { tv_map_vector_frame(state) };
+        assert_eq!(count, 3, "one point, one line, one polygon");
+
+        let coords = frame_coords(state);
+        let rings = frame_rings(state);
+        assert!(!coords.is_empty());
+        assert_eq!(
+            rings.iter().sum::<u32>() as usize * 2,
+            coords.len(),
+            "every ring's points must be in the coordinate pool"
+        );
+
+        for x in coords.iter().step_by(2) {
+            assert!(*x >= placement.screen_x && *x <= placement.screen_x + placement.size);
+        }
+        for y in coords.iter().skip(1).step_by(2) {
+            assert!(*y >= placement.screen_y && *y <= placement.screen_y + placement.size);
+        }
+
+        let kinds: Vec<i32> = (0..count)
+            .map(|i| feature_at(state, i).unwrap().kind)
+            .collect();
+        assert_eq!(kinds, [TV_VECTOR_POINT, TV_VECTOR_LINE, TV_VECTOR_POLYGON]);
+        assert!(feature_at(state, count).is_none());
+
+        let polygon = feature_at(state, 2).unwrap();
+        assert_eq!(polygon.ring_count, 2, "an exterior and one hole");
+        assert_eq!(polygon.fill_argb >> 24, 255);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// Panning away from a tile drops its geometry from the frame, and panning
+    /// back brings it in again without a refetch.
+    #[test]
+    fn test_vector_frame_follows_the_camera() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        assert!(unsafe { tv_map_vector_frame(state) } > 0);
+
+        unsafe { tv_map_set_center(state, -33.9, 151.2) };
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+        assert!(frame_coords(state).is_empty());
+
+        unsafe { tv_map_set_center(state, ROUTE[0].0, ROUTE[0].1) };
+        assert!(unsafe { tv_map_vector_frame(state) } > 0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// A short buffer is filled as far as it goes and still reports the full
+    /// length, so the host can size its own.
+    #[test]
+    fn test_vector_coords_report_the_full_length() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        unsafe { tv_map_vector_frame(state) };
+
+        let len = unsafe { tv_map_vector_coords(state, std::ptr::null_mut(), 0) };
+        assert!(len > 2);
+        let mut two = [0.0f32; 2];
+        assert_eq!(
+            unsafe { tv_map_vector_coords(state, two.as_mut_ptr(), 2) },
+            len
+        );
+        assert_eq!(two, frame_coords(state)[..2]);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    #[test]
+    fn test_vector_calls_reject_nulls() {
+        let state = std::ptr::null_mut();
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+        assert!(!unsafe { tv_vector_cache_has(std::ptr::null(), 0, 0, 0) });
+        assert!(unsafe { tv_map_vector_tile_url(std::ptr::null(), 0, 0, 0) }.is_null());
+        assert!(feature_at(state, 0).is_none());
+        assert_eq!(
+            unsafe { tv_map_vector_coords(std::ptr::null(), std::ptr::null_mut(), 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { tv_map_vector_rings(std::ptr::null(), std::ptr::null_mut(), 0) },
+            0
+        );
+        unsafe { tv_map_set_vector_tile_url(state, std::ptr::null()) };
+        unsafe { tv_vector_cache_clear(state) };
+    }
+
+    /// Changing the source drops what the old one served.
+    #[test]
+    fn test_vector_cache_clears_with_the_template() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+
+        let url = CString::new("https://vector.example.com/{z}/{x}/{y}.mvt").unwrap();
+        unsafe { tv_map_set_vector_tile_url(state, url.as_ptr()) };
+        assert!(!unsafe { tv_vector_cache_has(state, placement.z, placement.x, placement.y) });
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+
+        assert!(put_sample_tile(state, &placement));
+        unsafe { tv_vector_cache_clear(state) };
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
         unsafe { tv_map_destroy(state) };
     }
 

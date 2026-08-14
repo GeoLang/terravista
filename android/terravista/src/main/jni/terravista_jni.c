@@ -58,6 +58,17 @@ typedef struct {
     bool off_route;
 } TvNavProgress;
 
+typedef struct {
+    int32_t kind;
+    uint32_t ring_offset;
+    uint32_t ring_count;
+    uint32_t coord_offset;
+    uint32_t fill_argb;
+    uint32_t stroke_argb;
+    float stroke_width;
+    float point_radius;
+} TvVectorFeature;
+
 extern TvMapState *tv_map_create(uint32_t width, uint32_t height, float dpr);
 extern void tv_map_destroy(TvMapState *state);
 extern void tv_map_set_center(TvMapState *state, double lat, double lon);
@@ -101,6 +112,17 @@ extern char *tv_nav_instruction(const TvMapState *state);
 extern void tv_nav_clear(TvMapState *state);
 extern double tv_distance_between(double lat1, double lon1, double lat2, double lon2);
 extern double tv_bearing_between(double lat1, double lon1, double lat2, double lon2);
+extern void tv_map_set_vector_tile_url(TvMapState *state, const char *url);
+extern char *tv_map_vector_tile_url(const TvMapState *state, uint8_t z, uint32_t x, uint32_t y);
+extern bool tv_vector_cache_put(TvMapState *state, uint8_t z, uint32_t x, uint32_t y,
+                                const uint8_t *bytes, size_t len);
+extern bool tv_vector_cache_has(const TvMapState *state, uint8_t z, uint32_t x, uint32_t y);
+extern void tv_vector_cache_clear(TvMapState *state);
+extern uint32_t tv_map_vector_frame(TvMapState *state);
+extern bool tv_map_vector_feature_at(const TvMapState *state, uint32_t index,
+                                     TvVectorFeature *out);
+extern size_t tv_map_vector_coords(const TvMapState *state, float *out, size_t cap);
+extern size_t tv_map_vector_rings(const TvMapState *state, uint32_t *out, size_t cap);
 
 #define STATE(h) ((TvMapState *)(intptr_t)(h))
 
@@ -472,6 +494,96 @@ JNIEXPORT void JNICALL FN(navClear)(JNIEnv *env, jclass c, jlong h) {
     (void)env;
     (void)c;
     tv_nav_clear(STATE(h));
+}
+
+JNIEXPORT void JNICALL FN(setVectorTileUrl)(JNIEnv *env, jclass c, jlong h, jstring url) {
+    (void)c;
+    const char *s = (*env)->GetStringUTFChars(env, url, NULL);
+    tv_map_set_vector_tile_url(STATE(h), s);
+    (*env)->ReleaseStringUTFChars(env, url, s);
+}
+
+JNIEXPORT jstring JNICALL FN(vectorTileUrl)(JNIEnv *env, jclass c, jlong h, jint z, jint x,
+                                            jint y) {
+    (void)c;
+    return take_string(env, tv_map_vector_tile_url(STATE(h), (uint8_t)z, (uint32_t)x, (uint32_t)y));
+}
+
+JNIEXPORT jboolean JNICALL FN(vectorCachePut)(JNIEnv *env, jclass c, jlong h, jint z, jint x,
+                                              jint y, jbyteArray bytes) {
+    (void)c;
+    jsize len = (*env)->GetArrayLength(env, bytes);
+    jbyte *buf = (*env)->GetByteArrayElements(env, bytes, NULL);
+    bool ok = tv_vector_cache_put(STATE(h), (uint8_t)z, (uint32_t)x, (uint32_t)y,
+                                  (const uint8_t *)buf, (size_t)len);
+    (*env)->ReleaseByteArrayElements(env, bytes, buf, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN(vectorCacheHas)(JNIEnv *env, jclass c, jlong h, jint z, jint x,
+                                              jint y) {
+    (void)env;
+    (void)c;
+    return tv_vector_cache_has(STATE(h), (uint8_t)z, (uint32_t)x, (uint32_t)y) ? JNI_TRUE
+                                                                              : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL FN(vectorCacheClear)(JNIEnv *env, jclass c, jlong h) {
+    (void)env;
+    (void)c;
+    tv_vector_cache_clear(STATE(h));
+}
+
+JNIEXPORT jint JNICALL FN(vectorFrame)(JNIEnv *env, jclass c, jlong h) {
+    (void)env;
+    (void)c;
+    return (jint)tv_map_vector_frame(STATE(h));
+}
+
+// ints = {kind, ring_offset, ring_count, coord_offset, fill_argb, stroke_argb};
+// floats = {stroke_width, point_radius}
+JNIEXPORT jboolean JNICALL FN(vectorFeatureAt)(JNIEnv *env, jclass c, jlong h, jint index,
+                                               jintArray ints, jfloatArray floats) {
+    (void)c;
+    TvVectorFeature f;
+    if ((*env)->GetArrayLength(env, ints) < 6 || (*env)->GetArrayLength(env, floats) < 2) {
+        return JNI_FALSE;
+    }
+    if (!tv_map_vector_feature_at(STATE(h), (uint32_t)index, &f)) {
+        return JNI_FALSE;
+    }
+    jint counts[6] = {f.kind, (jint)f.ring_offset, (jint)f.ring_count, (jint)f.coord_offset,
+                      (jint)f.fill_argb, (jint)f.stroke_argb};
+    jfloat paint[2] = {f.stroke_width, f.point_radius};
+    (*env)->SetIntArrayRegion(env, ints, 0, 6, counts);
+    (*env)->SetFloatArrayRegion(env, floats, 0, 2, paint);
+    return JNI_TRUE;
+}
+
+// Fills as much of out as fits and returns the frame's full length.
+JNIEXPORT jint JNICALL FN(vectorCoords)(JNIEnv *env, jclass c, jlong h, jfloatArray out) {
+    (void)c;
+    jsize cap = (*env)->GetArrayLength(env, out);
+    if (cap == 0) {
+        return (jint)tv_map_vector_coords(STATE(h), NULL, 0);
+    }
+    jfloat *buf = (*env)->GetFloatArrayElements(env, out, NULL);
+    size_t len = tv_map_vector_coords(STATE(h), buf, (size_t)cap);
+    (*env)->ReleaseFloatArrayElements(env, out, buf, 0);
+    return (jint)len;
+}
+
+JNIEXPORT jint JNICALL FN(vectorRings)(JNIEnv *env, jclass c, jlong h, jintArray out) {
+    (void)c;
+    jsize cap = (*env)->GetArrayLength(env, out);
+    if (cap == 0) {
+        return (jint)tv_map_vector_rings(STATE(h), NULL, 0);
+    }
+    // jint is signed 32-bit, tv writes uint32_t; same width, reinterpret
+    jint *buf = (*env)->GetIntArrayElements(env, out, NULL);
+    size_t len = tv_map_vector_rings(STATE(h), (uint32_t *)buf, (size_t)cap);
+    (*env)->ReleaseIntArrayElements(env, out, buf, 0);
+    return (jint)len;
 }
 
 JNIEXPORT jdouble JNICALL FN(distanceBetween)(JNIEnv *env, jclass c, jdouble lat1, jdouble lon1,

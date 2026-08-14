@@ -29,6 +29,11 @@ internal object TerraVistaNative {
     const val NAV_OFF_ROUTE = 1
     const val NAV_ARRIVED = 2
 
+    // vector geometry kinds, must match TV_VECTOR_* in terravista-ffi
+    const val VECTOR_POINT = 0
+    const val VECTOR_LINE = 1
+    const val VECTOR_POLYGON = 2
+
     @JvmStatic external fun create(width: Int, height: Int, dpr: Float): Long
     @JvmStatic external fun destroy(handle: Long)
 
@@ -73,6 +78,35 @@ internal object TerraVistaNative {
 
     @JvmStatic external fun cacheGet(handle: Long, z: Int, x: Int, y: Int): ByteArray?
     @JvmStatic external fun cacheClear(handle: Long)
+
+    @JvmStatic external fun setVectorTileUrl(handle: Long, template: String)
+    @JvmStatic external fun vectorTileUrl(handle: Long, z: Int, x: Int, y: Int): String?
+
+    /** Decodes on the way in, so false means the bytes were not a vector tile. */
+    @JvmStatic external fun vectorCachePut(handle: Long, z: Int, x: Int, y: Int, bytes: ByteArray): Boolean
+
+    @JvmStatic external fun vectorCacheHas(handle: Long, z: Int, x: Int, y: Int): Boolean
+    @JvmStatic external fun vectorCacheClear(handle: Long)
+
+    /** Recomputes the frame's vector geometry. Call before the readers below. */
+    @JvmStatic external fun vectorFrame(handle: Long): Int
+
+    /**
+     * `ints` receives kind, ringOffset, ringCount, coordOffset, fillArgb,
+     * strokeArgb; `floats` receives strokeWidth and pointRadius.
+     */
+    @JvmStatic external fun vectorFeatureAt(
+        handle: Long,
+        index: Int,
+        ints: IntArray,
+        floats: FloatArray,
+    ): Boolean
+
+    /** Fills as much of `out` as fits and returns the frame's full length. */
+    @JvmStatic external fun vectorCoords(handle: Long, out: FloatArray): Int
+
+    /** Point count per ring, in the order the features reference them. */
+    @JvmStatic external fun vectorRings(handle: Long, out: IntArray): Int
 
     /** `xy` receives screenX, screenY in device pixels, north-up like tile placements. */
     @JvmStatic external fun project(
