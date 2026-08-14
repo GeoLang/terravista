@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Html
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -41,13 +42,21 @@ class MainActivity : Activity() {
             "Dark" to "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
         )
 
-        // MapLibre's keyless demo tileset: country polygons and graticule lines,
-        // served to zoom 6 and no further
-        const val VECTOR_TILES = "https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf"
-        const val VECTOR_ZOOM = 3.0
+        // openfreemap serves openstreetmap through openmaptiles, and rotates the
+        // tile url, so the current one and the tileset's depth come from here
+        const val OPENFREEMAP_TILEJSON_URL = "https://tiles.openfreemap.org/planet"
+
+        /** Used when the TileJSON cannot be had, so the button still shows something. */
+        val FALLBACK_VECTOR_SOURCE = VectorSource(
+            name = "MapLibre demo",
+            tileUrlTemplate = "https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf",
+            tilesetMaxZoom = 6,
+            attribution = "MapLibre demo tiles, country polygons from Natural Earth",
+        )
+
         // the SDK asks for tiles above the camera zoom on a dense screen, and
-        // anything past the tileset's zoom 6 is a 404
-        const val VECTOR_MAX_ZOOM = 4.0
+        // anything past the tileset's max zoom is a 404
+        const val VECTOR_ZOOM_HEADROOM = 2
         const val LAYER_POLL_MS = 500L
 
         const val LONDON_LATITUDE = 51.5074
@@ -90,6 +99,9 @@ class MainActivity : Activity() {
     private var walking = false
     private var fixIndex = 0
     private var vector = false
+    private var vectorSource: VectorSource? = null
+    private var vectorAttribution = ""
+    private var fetchingVectorSource = false
 
     /** The demo route densified into evenly spaced simulated GPS fixes. */
     private val fixes: List<RoutePoint> = buildList {
@@ -186,21 +198,52 @@ class MainActivity : Activity() {
             camera.latitude,
             camera.longitude,
         )
-        readout.text = if (vector) "$line\n${vectorLayerLine()}" else line
+        readout.text = if (vector) "$line\n${vectorSourceLine()}\n${vectorLayerLine()}" else line
         Log.i(TAG, line)
     }
 
     /**
-     * Draw the demo vector tileset over the basemap, in colours of this app's
-     * choosing.
+     * Draw street-level vector tiles over the basemap.
      *
-     * Its layers are named for its own data, not the OpenMapTiles names the SDK
-     * has a built-in look for, so without [MapView.setLayerStyle] the whole
-     * tileset would draw in one fallback colour.
+     * The tile url is not known ahead of time: OpenFreeMap rotates it, so the
+     * layer waits on a TileJSON fetch the first time it is asked for.
      */
     private fun showVectorLayer() {
         vector = true
-        map.vectorTileUrlTemplate = VECTOR_TILES
+        val known = vectorSource
+        if (known != null) {
+            applyVectorSource(known)
+            return
+        }
+        readout.text = "vector source: loading"
+        if (fetchingVectorSource) return
+        fetchingVectorSource = true
+        Thread {
+            val fetched = fetchVectorSource(OPENFREEMAP_TILEJSON_URL)
+            handler.post { applyVectorSource(fetched ?: FALLBACK_VECTOR_SOURCE) }
+        }.start()
+    }
+
+    private fun applyVectorSource(source: VectorSource) {
+        fetchingVectorSource = false
+        vectorSource = source
+        vectorAttribution = plainText(source.attribution)
+        if (!vector) return
+        if (source === FALLBACK_VECTOR_SOURCE) styleFallbackLayers()
+        map.vectorTileUrlTemplate = source.tileUrlTemplate
+        map.maxZoom = (source.tilesetMaxZoom - VECTOR_ZOOM_HEADROOM).toDouble()
+        // the setter clamps, so a shallow tileset lands as deep as it can go
+        map.zoom = LONDON_ZOOM
+        handler.post(::pollVectorLayers)
+        Log.i(TAG, "vector layer on: ${source.name} to z${source.tilesetMaxZoom}, ${source.tileUrlTemplate}")
+    }
+
+    /**
+     * Colours for the fallback tileset, whose layers are named for its own data
+     * rather than the OpenMapTiles names the SDK has a built-in look for. Without
+     * [MapView.setLayerStyle] the whole thing would draw in one fallback colour.
+     */
+    private fun styleFallbackLayers() {
         map.setLayerStyle(
             layerName = "countries",
             fillColor = Color.argb(110, 76, 175, 80),
@@ -213,10 +256,6 @@ class MainActivity : Activity() {
             strokeColor = Color.argb(140, 33, 33, 33),
             strokeWidth = 1f,
         )
-        map.maxZoom = VECTOR_MAX_ZOOM
-        map.zoom = VECTOR_ZOOM
-        handler.post(::pollVectorLayers)
-        Log.i(TAG, "vector layer on")
     }
 
     private fun hideVectorLayer() {
@@ -228,11 +267,20 @@ class MainActivity : Activity() {
         Log.i(TAG, "vector layer off")
     }
 
+    /** TileJSON attribution is html, and the readout is a plain text view. */
+    private fun plainText(html: String): String =
+        Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT).toString().trim()
+
     /** The layer names only exist once a frame has drawn, so wait for tiles. */
     private fun pollVectorLayers() {
         if (!vector) return
         showCamera(map.cameraPosition)
         if (map.visibleVectorLayers.isEmpty()) handler.postDelayed(::pollVectorLayers, LAYER_POLL_MS)
+    }
+
+    private fun vectorSourceLine(): String {
+        val source = vectorSource ?: return "vector source: loading"
+        return "${source.name} to z${source.tilesetMaxZoom}  $vectorAttribution"
     }
 
     private fun vectorLayerLine(): String {
@@ -344,7 +392,7 @@ class MainActivity : Activity() {
     /** Walks simulated fixes along [DEMO_ROUTE], driving the dot and navigation. */
     private fun startWalk() {
         if (!map.startNavigation(DEMO_ROUTE)) return
-        // the walk needs street zoom, which the demo tileset does not reach
+        // the walk runs at zoom 16, past what any of these tilesets serve
         if (vector) hideVectorLayer()
         walking = true
         fixIndex = 0

@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a package's metadata now clamp at the Mercator limit and cross the
   antimeridian the short way round like any other region, where before an
   inverted box was rejected and silently replaced by the whole world.
+- Sample app draws street-level vector tiles. It reads OpenFreeMap's TileJSON at
+  https://tiles.openfreemap.org/planet the first time the vector layer is asked
+  for, and takes the current tile url and the tileset's max zoom from it, because
+  OpenFreeMap rotates that url and a hardcoded one goes stale. The camera caps
+  two zooms below the tileset, so a dense screen never asks for a tile past the
+  end, and the readout carries the tileset's attribution. If the fetch fails the
+  layer falls back to MapLibre's demo tileset, and the log says which one drew.
 - Sample app has a small real UI: the basemap button opens a picker listing the
   six sources with the current one checked, saving a region asks first with the
   tile count and size from `estimateRegion`, and the map carries floating zoom

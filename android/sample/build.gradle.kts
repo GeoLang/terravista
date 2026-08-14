@@ -34,4 +34,8 @@ android {
 
 dependencies {
     implementation(project(":terravista"))
+
+    testImplementation("junit:junit:4.13.2")
+    // the android.jar on the unit test classpath stubs org.json, this is the real thing
+    testImplementation("org.json:json:20260719")
 }
