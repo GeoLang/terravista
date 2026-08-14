@@ -3,4 +3,5 @@
     <string name="app_name">TerraVista Sample</string>
     <string name="switch_basemap">Basemap</string>
     <string name="navigate">Navigate</string>
+    <string name="vector_layer">Countries</string>
 </resources>

@@ -60,6 +60,7 @@ typedef struct {
 
 typedef struct {
     int32_t kind;
+    uint32_t layer_index;
     uint32_t ring_offset;
     uint32_t ring_count;
     uint32_t coord_offset;
@@ -123,6 +124,10 @@ extern bool tv_map_vector_feature_at(const TvMapState *state, uint32_t index,
                                      TvVectorFeature *out);
 extern size_t tv_map_vector_coords(const TvMapState *state, float *out, size_t cap);
 extern size_t tv_map_vector_rings(const TvMapState *state, uint32_t *out, size_t cap);
+extern uint32_t tv_map_vector_layer_count(const TvMapState *state);
+extern char *tv_map_vector_layer_name(const TvMapState *state, uint32_t index);
+extern bool tv_map_set_layer_style(TvMapState *state, const char *layer_name, uint32_t fill_argb,
+                                   uint32_t stroke_argb, float stroke_width);
 
 #define STATE(h) ((TvMapState *)(intptr_t)(h))
 
@@ -540,24 +545,50 @@ JNIEXPORT jint JNICALL FN(vectorFrame)(JNIEnv *env, jclass c, jlong h) {
     return (jint)tv_map_vector_frame(STATE(h));
 }
 
-// ints = {kind, ring_offset, ring_count, coord_offset, fill_argb, stroke_argb};
+// ints = {kind, layer_index, ring_offset, ring_count, coord_offset, fill_argb, stroke_argb};
 // floats = {stroke_width, point_radius}
 JNIEXPORT jboolean JNICALL FN(vectorFeatureAt)(JNIEnv *env, jclass c, jlong h, jint index,
                                                jintArray ints, jfloatArray floats) {
     (void)c;
     TvVectorFeature f;
-    if ((*env)->GetArrayLength(env, ints) < 6 || (*env)->GetArrayLength(env, floats) < 2) {
+    if ((*env)->GetArrayLength(env, ints) < 7 || (*env)->GetArrayLength(env, floats) < 2) {
         return JNI_FALSE;
     }
     if (!tv_map_vector_feature_at(STATE(h), (uint32_t)index, &f)) {
         return JNI_FALSE;
     }
-    jint counts[6] = {f.kind, (jint)f.ring_offset, (jint)f.ring_count, (jint)f.coord_offset,
-                      (jint)f.fill_argb, (jint)f.stroke_argb};
+    jint counts[7] = {f.kind,
+                      (jint)f.layer_index,
+                      (jint)f.ring_offset,
+                      (jint)f.ring_count,
+                      (jint)f.coord_offset,
+                      (jint)f.fill_argb,
+                      (jint)f.stroke_argb};
     jfloat paint[2] = {f.stroke_width, f.point_radius};
-    (*env)->SetIntArrayRegion(env, ints, 0, 6, counts);
+    (*env)->SetIntArrayRegion(env, ints, 0, 7, counts);
     (*env)->SetFloatArrayRegion(env, floats, 0, 2, paint);
     return JNI_TRUE;
+}
+
+JNIEXPORT jint JNICALL FN(vectorLayerCount)(JNIEnv *env, jclass c, jlong h) {
+    (void)env;
+    (void)c;
+    return (jint)tv_map_vector_layer_count(STATE(h));
+}
+
+JNIEXPORT jstring JNICALL FN(vectorLayerName)(JNIEnv *env, jclass c, jlong h, jint index) {
+    (void)c;
+    return take_string(env, tv_map_vector_layer_name(STATE(h), (uint32_t)index));
+}
+
+JNIEXPORT jboolean JNICALL FN(setLayerStyle)(JNIEnv *env, jclass c, jlong h, jstring layer,
+                                             jint fillArgb, jint strokeArgb, jfloat strokeWidth) {
+    (void)c;
+    const char *name = (*env)->GetStringUTFChars(env, layer, NULL);
+    bool ok = tv_map_set_layer_style(STATE(h), name, (uint32_t)fillArgb, (uint32_t)strokeArgb,
+                                     strokeWidth);
+    (*env)->ReleaseStringUTFChars(env, layer, name);
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 // Fills as much of out as fits and returns the frame's full length.

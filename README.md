@@ -177,7 +177,7 @@ so that waits for the GPU backends in v0.3.
 # Build all crates
 cargo build
 
-# Run tests (123 tests)
+# Run tests (126 tests)
 cargo test
 
 # Lint
@@ -322,8 +322,14 @@ bool tv_vector_cache_put(TvMapState* state, uint8_t z, uint32_t x, uint32_t y,
 bool tv_vector_cache_has(const TvMapState* state, uint8_t z, uint32_t x, uint32_t y);
 void tv_vector_cache_clear(TvMapState* state);
 
+// How one layer draws, over the built-in look. Alpha 0 means do not paint, so a
+// transparent fill leaves a polygon as an outline.
+bool tv_map_set_layer_style(TvMapState* state, const char* layer_name,
+                            uint32_t fill_argb, uint32_t stroke_argb, float stroke_width);
+
 typedef struct {
     int32_t kind;            // TV_VECTOR_POINT, _LINE, _POLYGON
+    uint32_t layer_index;    // into the frame's layer names
     uint32_t ring_offset, ring_count, coord_offset;
     uint32_t fill_argb, stroke_argb;  // 0xAARRGGBB, alpha 0 means do not paint
     float stroke_width, point_radius;
@@ -334,6 +340,9 @@ uint32_t tv_map_vector_frame(TvMapState* state);
 bool tv_map_vector_feature_at(const TvMapState* state, uint32_t i, TvVectorFeature* out);
 size_t tv_map_vector_coords(const TvMapState* state, float* out, size_t cap);
 size_t tv_map_vector_rings(const TvMapState* state, uint32_t* out, size_t cap);
+
+uint32_t tv_map_vector_layer_count(const TvMapState* state);
+char* tv_map_vector_layer_name(const TvMapState* state, uint32_t index);  // caller must free
 ```
 
 A feature's geometry is a run of rings. `tv_map_vector_rings` gives each ring's
@@ -341,6 +350,10 @@ point count and `tv_map_vector_coords` gives every point as an x and a y, in the
 same device pixels as the tile placements. A point is one ring of one point, a
 line is one ring, and a polygon's first ring is its exterior and the rest are
 holes. Both readers fill as much as `cap` allows and return the full length.
+
+Each feature names its source layer through `layer_index`, which indexes the
+frame's layer table. Both the index and the table only hold until the next
+`tv_map_vector_frame`.
 
 Vector tiles are a second source: they cache and draw alongside the raster ones,
 each with its own URL template.

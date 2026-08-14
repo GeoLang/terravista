@@ -92,14 +92,27 @@ internal object TerraVistaNative {
     @JvmStatic external fun vectorFrame(handle: Long): Int
 
     /**
-     * `ints` receives kind, ringOffset, ringCount, coordOffset, fillArgb,
-     * strokeArgb; `floats` receives strokeWidth and pointRadius.
+     * `ints` receives kind, layerIndex, ringOffset, ringCount, coordOffset,
+     * fillArgb, strokeArgb; `floats` receives strokeWidth and pointRadius.
      */
     @JvmStatic external fun vectorFeatureAt(
         handle: Long,
         index: Int,
         ints: IntArray,
         floats: FloatArray,
+    ): Boolean
+
+    /** Layers in the frame [vectorFrame] built, indexed by a feature's layerIndex. */
+    @JvmStatic external fun vectorLayerCount(handle: Long): Int
+    @JvmStatic external fun vectorLayerName(handle: Long, index: Int): String?
+
+    /** Colours are 0xAARRGGBB, alpha zero meaning do not paint. */
+    @JvmStatic external fun setLayerStyle(
+        handle: Long,
+        layerName: String,
+        fillArgb: Int,
+        strokeArgb: Int,
+        strokeWidth: Float,
     ): Boolean
 
     /** Fills as much of `out` as fits and returns the frame's full length. */

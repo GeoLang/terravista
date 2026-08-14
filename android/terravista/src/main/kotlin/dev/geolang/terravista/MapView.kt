@@ -78,7 +78,7 @@ class MapView @JvmOverloads constructor(
     private val navDistances = DoubleArray(2)
 
     // one frame's vector geometry, grown to fit and reused
-    private val vectorFeature = IntArray(6)
+    private val vectorFeature = IntArray(7)
     private val vectorPaintValues = FloatArray(2)
     private var vectorCoords = FloatArray(0)
     private var vectorRings = IntArray(0)
@@ -139,8 +139,8 @@ class MapView @JvmOverloads constructor(
      * `https://tiles.example.com/{z}/{x}/{y}.mvt`, or null for none.
      *
      * Vector tiles draw over the raster ones, so a map can carry both. Features
-     * are drawn with a fixed default look per layer name; there is no style
-     * spec and no labels.
+     * are drawn with a fixed look per layer name, which [setLayerStyle]
+     * overrides; there is no style spec and no labels.
      */
     var vectorTileUrlTemplate: String? = null
         set(value) {
@@ -152,6 +152,47 @@ class MapView @JvmOverloads constructor(
             }
             vectorInFlight.clear()
             invalidate()
+        }
+
+    /**
+     * Set how one vector layer draws, by the layer's name in the source.
+     *
+     * Colours are Android colour ints, and an alpha of zero means do not paint,
+     * so a transparent fill leaves a polygon as an outline. [strokeWidth] is in
+     * device pixels, like [Paint.setStrokeWidth]. A name the source does not
+     * serve is kept anyway, ready for a source that serves it.
+     *
+     * Returns false when the native map has been destroyed.
+     */
+    fun setLayerStyle(
+        layerName: String,
+        fillColor: Int,
+        strokeColor: Int,
+        strokeWidth: Float = 1.5f,
+    ): Boolean {
+        val ok = synchronized(sdk) {
+            handle != 0L &&
+                TerraVistaNative.setLayerStyle(handle, layerName, fillColor, strokeColor, strokeWidth)
+        }
+        if (ok) invalidate()
+        return ok
+    }
+
+    /**
+     * Names of the layers the last drawn vector frame held, in draw order.
+     *
+     * Empty when no vector source is set, or when nothing of it covers the
+     * screen.
+     */
+    val visibleVectorLayers: List<String>
+        get() = synchronized(sdk) {
+            if (handle == 0L) {
+                emptyList()
+            } else {
+                List(TerraVistaNative.vectorLayerCount(handle)) {
+                    TerraVistaNative.vectorLayerName(handle, it) ?: ""
+                }
+            }
         }
 
     var zoom: Double
@@ -504,12 +545,12 @@ class MapView @JvmOverloads constructor(
     /** Draws whatever [vectorFeature] and [vectorPaintValues] currently hold. */
     private fun drawVectorFeature(canvas: Canvas) {
         val kind = vectorFeature[0]
-        val ringOffset = vectorFeature[1]
-        val ringCount = vectorFeature[2]
-        val fill = vectorFeature[4]
-        val stroke = vectorFeature[5]
+        val ringOffset = vectorFeature[2]
+        val ringCount = vectorFeature[3]
+        val fill = vectorFeature[5]
+        val stroke = vectorFeature[6]
         val strokeWidth = vectorPaintValues[0]
-        var coord = vectorFeature[3]
+        var coord = vectorFeature[4]
 
         if (coord + 2 > vectorCoords.size) return
         fillPaint.color = fill

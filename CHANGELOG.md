@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-08-14
+
+- Vector features carry their layer: the frame keeps a table of the layer names
+  it drew, each feature indexes into it, and the FFI reads it back with
+  `tv_map_vector_layer_count` and `tv_map_vector_layer_name`. Colour was the
+  only per-layer signal a host had before.
+- Per-layer styling: `tv_map_set_layer_style` sets a layer's fill colour,
+  stroke colour and stroke width by name, over the built-in look. C FFI grown
+  from 50 to 53 symbols.
+- Android: `MapView.setLayerStyle(...)` and `MapView.visibleVectorLayers`, and
+  the sample app draws a vector layer over the raster basemap.
+
 ## [0.4.0] - 2026-08-13
 
 - MVT decoding in the core: layers, features, points, lines, polygons and

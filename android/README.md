@@ -67,6 +67,8 @@ class MainActivity : Activity() {
 | `minZoom` / `maxZoom` | zoom limits, default 0 and 18 |
 | `tileUrlTemplate` | XYZ template, default OpenStreetMap |
 | `vectorTileUrlTemplate` | XYZ template for MVT tiles, null for none |
+| `setLayerStyle(name, fill, stroke, width)` | how one vector layer draws |
+| `visibleVectorLayers` | layer names in the last drawn vector frame |
 | `onCameraChangeListener` | fires on every camera move |
 | `destroy()` | free the native map, idempotent |
 
@@ -91,6 +93,23 @@ OpenMapTiles-style sources use (`water`, `landcover`, `building`,
 `transportation`, `boundary`). There is no style spec, no filters and no labels,
 so a source with other layer names still draws, in the fallback colour. Set the
 property to null to turn the source off, which drops its tiles.
+
+Override the look one layer at a time:
+
+```kotlin
+map.setLayerStyle(
+    layerName = "water",
+    fillColor = Color.argb(120, 0, 90, 200),
+    strokeColor = Color.TRANSPARENT,
+    strokeWidth = 2f,
+)
+```
+
+Colours are Android colour ints, and a zero alpha means do not paint, so a
+transparent fill leaves a polygon as an outline. The stroke width is in device
+pixels. A layer name the source does not serve is kept anyway, ready for a
+source that serves it. `visibleVectorLayers` lists the layer names the last
+drawn frame held, which is how to find out what a source actually calls things.
 
 ## Tile sources
 

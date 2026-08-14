@@ -33,6 +33,14 @@
         android:text="@string/switch_basemap" />
 
     <Button
+        android:id="@+id/vector"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_margin="16dp"
+        android:text="@string/vector_layer" />
+
+    <Button
         android:id="@+id/navigate"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

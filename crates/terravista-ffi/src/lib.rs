@@ -22,8 +22,8 @@ use terravista_core::gesture::{GestureRecognizer, GestureResult, TouchEvent, Tou
 use terravista_core::location::{Coordinate, TrackingMode};
 use terravista_core::mvt::{VectorTile, decode_tile};
 use terravista_core::renderer::{
-    RenderCommand, RenderFeature, RenderGeometry, TilePlacement, VectorStyle, vector_tile_commands,
-    visible_tiles,
+    LayerStyle, RenderCommand, RenderFeature, RenderGeometry, TilePlacement, VectorStyle,
+    vector_tile_commands, visible_tiles,
 };
 use terravista_core::route::{Maneuver, NavStatus, NavigationUpdate, Navigator, Route, RouteStep};
 use terravista_core::tile_cache::{CacheConfig, TileCache, TileData, TileMeta};
@@ -55,6 +55,8 @@ struct VectorState {
     coords: Vec<f32>,
     /// Point count per ring.
     rings: Vec<u32>,
+    /// Every layer the frame drew, indexed by `TvVectorFeature::layer_index`.
+    layer_names: Vec<String>,
 }
 
 // ─── Map State ───────────────────────────────────────────────────────────────
@@ -83,6 +85,7 @@ pub extern "C" fn tv_map_create(
             features: Vec::new(),
             coords: Vec::new(),
             rings: Vec::new(),
+            layer_names: Vec::new(),
         },
     });
     Box::into_raw(state)
@@ -583,6 +586,9 @@ pub const TV_VECTOR_POLYGON: i32 = 2;
 pub struct TvVectorFeature {
     /// One of the `TV_VECTOR_*` values.
     pub kind: i32,
+    /// The layer this feature came from, read back with
+    /// `tv_map_vector_layer_name`.
+    pub layer_index: u32,
     pub ring_offset: u32,
     pub ring_count: u32,
     pub coord_offset: u32,
@@ -598,6 +604,12 @@ fn argb(color: Option<[f32; 4]>) -> u32 {
     };
     let byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u32;
     (byte(color[3]) << 24) | (byte(color[0]) << 16) | (byte(color[1]) << 8) | byte(color[2])
+}
+
+fn color_from_argb(value: u32) -> Option<[f32; 4]> {
+    let channel = |shift: u32| ((value >> shift) & 0xFF) as f32 / 255.0;
+    let alpha = channel(24);
+    (alpha > 0.0).then(|| [channel(16), channel(8), channel(0), alpha])
 }
 
 /// Point the vector source at a new URL template.
@@ -640,6 +652,48 @@ pub unsafe extern "C" fn tv_map_vector_tile_url(
         Ok(c) => c.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// Set how one vector layer draws, by name.
+///
+/// Colors are `0xAARRGGBB`, and an alpha of zero means do not paint, so a
+/// polygon layer with a zero fill draws as an outline. `stroke_width` is in
+/// device pixels. The layer keeps whatever point radius it already had. A name
+/// no source serves is stored anyway, ready for a source that does. Takes
+/// effect on the next `tv_map_vector_frame`.
+///
+/// Returns false on a null pointer or a name that is not UTF-8.
+///
+/// # Safety
+/// `state` and `layer_name` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_set_layer_style(
+    state: *mut TvMapState,
+    layer_name: *const c_char,
+    fill_argb: u32,
+    stroke_argb: u32,
+    stroke_width: f32,
+) -> bool {
+    let Some(s) = (unsafe { state.as_mut() }) else {
+        return false;
+    };
+    if layer_name.is_null() {
+        return false;
+    }
+    let Ok(name) = unsafe { CStr::from_ptr(layer_name) }.to_str() else {
+        return false;
+    };
+    let point_radius = s.vector.style.for_layer(name).point_radius;
+    s.vector.style.layers.insert(
+        name.to_string(),
+        LayerStyle {
+            fill_color: color_from_argb(fill_argb),
+            stroke_color: color_from_argb(stroke_argb),
+            stroke_width,
+            point_radius,
+        },
+    );
+    true
 }
 
 /// Store a fetched vector tile, decoding it on the way in.
@@ -731,6 +785,7 @@ pub unsafe extern "C" fn tv_map_vector_frame(state: *mut TvMapState) -> u32 {
     s.vector.features.clear();
     s.vector.coords.clear();
     s.vector.rings.clear();
+    s.vector.layer_names.clear();
 
     let mut visible = HashMap::with_capacity(s.placements.len());
     for placement in &s.placements {
@@ -750,11 +805,16 @@ pub unsafe extern "C" fn tv_map_vector_frame(state: *mut TvMapState) -> u32 {
 
         let commands = vector_tile_commands(&tile, placement, &s.vector.style);
         for command in commands {
-            let RenderCommand::DrawVectorLayer { features, .. } = command else {
+            let RenderCommand::DrawVectorLayer {
+                layer_name,
+                features,
+            } = command
+            else {
                 continue;
             };
+            let layer_index = layer_index(&mut s.vector, &layer_name);
             for feature in &features {
-                push_feature(&mut s.vector, feature);
+                push_feature(&mut s.vector, feature, layer_index);
             }
         }
         visible.insert(coord, tile);
@@ -765,7 +825,17 @@ pub unsafe extern "C" fn tv_map_vector_frame(state: *mut TvMapState) -> u32 {
     s.vector.features.len() as u32
 }
 
-fn push_feature(vector: &mut VectorState, feature: &RenderFeature) {
+/// Where `name` sits in the frame's layer table, appending it if this is the
+/// first tile to carry it.
+fn layer_index(vector: &mut VectorState, name: &str) -> u32 {
+    if let Some(index) = vector.layer_names.iter().position(|held| held == name) {
+        return index as u32;
+    }
+    vector.layer_names.push(name.to_string());
+    (vector.layer_names.len() - 1) as u32
+}
+
+fn push_feature(vector: &mut VectorState, feature: &RenderFeature, layer_index: u32) {
     let ring_offset = vector.rings.len() as u32;
     let coord_offset = vector.coords.len() as u32;
     let mut push_ring = |points: &[[f32; 2]]| {
@@ -801,6 +871,7 @@ fn push_feature(vector: &mut VectorState, feature: &RenderFeature) {
 
     vector.features.push(TvVectorFeature {
         kind,
+        layer_index,
         ring_offset,
         ring_count,
         coord_offset,
@@ -831,6 +902,40 @@ pub unsafe extern "C" fn tv_map_vector_feature_at(
     };
     *out = *feature;
     true
+}
+
+/// How many layers the frame built by `tv_map_vector_frame` drew.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_layer_count(state: *const TvMapState) -> u32 {
+    unsafe { state.as_ref() }.map_or(0, |s| s.vector.layer_names.len() as u32)
+}
+
+/// Name of one of the frame's layers, indexed by a feature's `layer_index`.
+///
+/// Returns a string the caller must free with `tv_string_free`, or null if the
+/// index is out of range. The indices only hold until the next
+/// `tv_map_vector_frame`.
+///
+/// # Safety
+/// `state` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tv_map_vector_layer_name(
+    state: *const TvMapState,
+    index: u32,
+) -> *mut c_char {
+    let Some(s) = (unsafe { state.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    let Some(name) = s.vector.layer_names.get(index as usize) else {
+        return std::ptr::null_mut();
+    };
+    match CString::new(name.as_str()) {
+        Ok(c) => c.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Copy the frame's coordinates into `out`, writing at most `cap` floats.
@@ -1628,6 +1733,7 @@ mod tests {
     fn feature_at(state: *mut TvMapState, index: u32) -> Option<TvVectorFeature> {
         let mut feature = TvVectorFeature {
             kind: -1,
+            layer_index: 0,
             ring_offset: 0,
             ring_count: 0,
             coord_offset: 0,
@@ -1754,6 +1860,88 @@ mod tests {
         let polygon = feature_at(state, 2).unwrap();
         assert_eq!(polygon.ring_count, 2, "an exterior and one hole");
         assert_eq!(polygon.fill_argb >> 24, 255);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// Every feature says which layer it came from, so a host can tell a road
+    /// from a river without going by colour.
+    #[test]
+    fn test_features_name_their_layer() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        let count = unsafe { tv_map_vector_frame(state) };
+
+        assert_eq!(unsafe { tv_map_vector_layer_count(state) }, 3);
+        let names: Vec<String> = (0..count)
+            .map(|i| {
+                let index = feature_at(state, i).unwrap().layer_index;
+                take_string(unsafe { tv_map_vector_layer_name(state, index) }).unwrap()
+            })
+            .collect();
+        assert_eq!(names, ["places", "roads", "water"]);
+
+        let past_end = unsafe { tv_map_vector_layer_count(state) };
+        assert!(unsafe { tv_map_vector_layer_name(state, past_end) }.is_null());
+        assert!(unsafe { tv_map_vector_layer_name(std::ptr::null(), 0) }.is_null());
+        assert_eq!(unsafe { tv_map_vector_layer_count(std::ptr::null()) }, 0);
+
+        // the table belongs to the frame, so a frame with nothing to draw empties it
+        unsafe { tv_map_set_center(state, -33.9, 151.2) };
+        assert_eq!(unsafe { tv_map_vector_frame(state) }, 0);
+        assert_eq!(unsafe { tv_map_vector_layer_count(state) }, 0);
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// A style set by name reaches the features of that layer and no other.
+    #[test]
+    fn test_layer_style_repaints_one_layer() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        unsafe { tv_map_vector_frame(state) };
+        let road_before = feature_at(state, 1).unwrap();
+        let water_before = feature_at(state, 2).unwrap();
+
+        let roads = CString::new("roads").unwrap();
+        assert!(unsafe { tv_map_set_layer_style(state, roads.as_ptr(), 0, 0xFF00FF00, 7.0) });
+        unsafe { tv_map_vector_frame(state) };
+
+        let road = feature_at(state, 1).unwrap();
+        assert_ne!(road.stroke_argb, road_before.stroke_argb);
+        assert_eq!(road.stroke_argb, 0xFF00FF00);
+        assert_eq!(road.stroke_width, 7.0);
+        assert_eq!(
+            feature_at(state, 2).unwrap().fill_argb,
+            water_before.fill_argb
+        );
+
+        assert!(!unsafe { tv_map_set_layer_style(state, std::ptr::null(), 0, 0, 1.0) });
+        assert!(!unsafe {
+            tv_map_set_layer_style(std::ptr::null_mut(), roads.as_ptr(), 0, 0, 1.0)
+        });
+        unsafe { tv_map_destroy(state) };
+    }
+
+    /// A point layer keeps the radius it had, which the setter has no argument
+    /// for, and still takes the new colours.
+    #[test]
+    fn test_layer_style_keeps_the_point_radius() {
+        let state = map();
+        let placement = first_visible_tile(state);
+        assert!(put_sample_tile(state, &placement));
+        unsafe { tv_map_vector_frame(state) };
+        let radius = feature_at(state, 0).unwrap().point_radius;
+        assert!(radius > 0.0);
+
+        let places = CString::new("places").unwrap();
+        assert!(unsafe { tv_map_set_layer_style(state, places.as_ptr(), 0xFF0000FF, 0, 1.0) });
+        unsafe { tv_map_vector_frame(state) };
+
+        let point = feature_at(state, 0).unwrap();
+        assert_eq!(point.point_radius, radius);
+        assert_eq!(point.fill_argb, 0xFF0000FF);
+        assert_eq!(point.stroke_argb, 0);
         unsafe { tv_map_destroy(state) };
     }
 
