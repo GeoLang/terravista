@@ -17,8 +17,9 @@ TerraVista is a cross-platform mobile mapping core written in Rust, designed to 
 
 ### Status
 
-This is v0.1. TerraVista is not yet a drop-in replacement for Mapbox or Google Maps: it
-cannot fetch or draw a tile on its own.
+This is v0.4. TerraVista is not yet a drop-in replacement for Mapbox or Google Maps: the
+core cannot fetch or draw a tile on its own. The Android library fetches over HTTP and
+draws on Canvas, including MVT.
 
 **What works today**
 

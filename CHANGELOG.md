@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-08-14
 
+- README status is v0.4, not v0.1: the core still does not fetch or draw; the
+  Android library does both, including MVT.
 - Vector features carry their layer: the frame keeps a table of the layer names
   it drew, each feature indexes into it, and the FFI reads it back with
   `tv_map_vector_layer_count` and `tv_map_vector_layer_name`. Colour was the
