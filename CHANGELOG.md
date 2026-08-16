@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-08-14
 
+- 2026-08-15: docs test count is 130.
 - README status is v0.4, not v0.1: the core still does not fetch or draw; the
   Android library does both, including MVT.
 - Vector features carry their layer: the frame keeps a table of the layer names
