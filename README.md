@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 
-**Mobile map SDK core for the GeoLang ecosystem**: camera and viewport math, gesture recognition, tile caching, offline feature storage, and on-device turn-by-turn navigation, exposed to iOS and Android over a flat C FFI.
+**Mobile map SDK core for the GeoLang ecosystem**: camera and viewport math, gesture recognition, tile caching, offline feature storage, and on-device turn-by-turn navigation, exposed to Android over a flat C FFI.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
@@ -13,7 +13,7 @@
 
 ## Overview
 
-TerraVista is a cross-platform mobile mapping core written in Rust, designed to be consumed from Swift (iOS) and Kotlin (Android) via a flat C FFI. It holds map state and does the map math. It does not talk to the network and it does not touch the GPU.
+TerraVista is a mobile mapping core written in Rust, consumed from Kotlin (Android) via a flat C FFI. It holds map state and does the map math. It does not talk to the network and it does not touch the GPU.
 
 ### Status
 
@@ -28,12 +28,10 @@ draws on Canvas, including MVT.
 - Tile cache: in-memory LRU keyed by tile coordinate, with XYZ URL template building
 - MVT decoding: layers, features, geometry and attributes, straight to screen-space draw commands
 - Offline vector store: in-memory feature CRUD with sync status tracking
-- Style engine: parses Mapbox GL style JSON and interpolates properties by zoom
 - Turn-by-turn navigation over a pre-computed route
 - Location model: coordinates, Haversine distance, bearing, tracking modes
 - Render command buffer: describes what to draw, in screen coordinates
-- Tile package format: a custom TVPK binary archive
-- C FFI covering map lifecycle, camera, gestures, and cache
+- C FFI covering map lifecycle, camera, gestures, cache, vector tiles, offline regions, user location and navigation
 
 **What the host app must supply**
 
