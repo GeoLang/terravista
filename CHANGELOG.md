@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-08-14
 
+- 2026-08-21: `docs/index.html` drops the iOS/Swift SDK, Mapbox GL style
+  parse, and auto-generated JNI claims. Android fetches and draws. The
+  core does not. There is no iOS binding.
 - 2026-08-15: docs test count is 130.
 - README status is v0.4, not v0.1: the core still does not fetch or draw; the
   Android library does both, including MVT.

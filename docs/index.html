@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TerraVista &mdash; Mobile Map SDK for GeoLang</title>
-    <meta name="description" content="Open-source mobile map SDK core: camera and viewport math, gesture recognition, tile caching, and on-device turn-by-turn navigation for iOS and Android. Tile fetching and rendering are the host app's job.">
+    <meta name="description" content="Open-source mobile map SDK core: camera and viewport math, gesture recognition, tile caching, and on-device turn-by-turn navigation for Android. There is no iOS or macOS binding. Tile fetching and GPU rendering are the host app's job.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -636,7 +636,7 @@
             <div class="feature-card">
                 <div class="feature-icon">🎨</div>
                 <h3>Style Engine</h3>
-                <p>Mapbox GL JSON-compatible styles with zoom-level interpolation. Fill, Line, Symbol, Circle, and Raster layer types.</p>
+                <p>Structs exist. They do not parse Mapbox GL JSON (snake_case, no <code>type</code> / <code>minzoom</code> / paint stop renames). No FFI symbol reaches this module. The renderer uses a hardcoded style keyed by layer name.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">🧭</div>
@@ -673,7 +673,7 @@
         <p class="section-desc">Clean separation between platform code, FFI boundary, and pure Rust core engine.</p>
 
         <div class="arch-diagram">
-            <div class="layer layer-platform">Swift (iOS/macOS) &nbsp;│&nbsp; Kotlin (Android)</div>
+            <div class="layer layer-platform">Kotlin (Android). There is no iOS or macOS binding.</div>
             <div class="layer layer-ffi">terravista-ffi — C ABI (staticlib + cdylib)</div>
             <div class="layer layer-core">terravista-core — Pure Rust Engine</div>
             <div class="arch-modules">
@@ -729,34 +729,9 @@
     <section id="integration">
         <div class="section-label">Platforms</div>
         <h2 class="section-title">Platform Integration</h2>
-        <p class="section-desc">Native Swift and Kotlin examples for iOS and Android. These wire up camera and gestures, which is what the SDK does today. Requesting the tiles at that URL and drawing them is still your app's job.</p>
+        <p class="section-desc">Kotlin on Android. There is no Swift module, no <code>.h</code>, no cbindgen, no iOS CI job. The Android library fetches tiles over HTTP and draws on Canvas. The core does neither.</p>
 
         <div class="code-section">
-            <div class="code-block">
-                <div class="code-header">
-                    <span>iOS — Swift</span>
-                    <span class="code-lang">Swift</span>
-                </div>
-                <pre><span class="kw">import</span> TerraVista
-
-<span class="kw">class</span> <span class="ty">MapViewController</span>: <span class="ty">UIViewController</span> {
-    <span class="kw">private var</span> map: <span class="ty">OpaquePointer</span>?
-
-    <span class="kw">override func</span> <span class="fn">viewDidLoad</span>() {
-        <span class="kw">super</span>.<span class="fn">viewDidLoad</span>()
-        <span class="kw">let</span> b = view.bounds
-        <span class="kw">let</span> s = <span class="ty">Float</span>(<span class="ty">UIScreen</span>.main.scale)
-        map = <span class="fn">tv_map_create</span>(<span class="ty">UInt32</span>(b.width),
-                           <span class="ty">UInt32</span>(b.height), s)
-        <span class="fn">tv_map_set_center</span>(map, <span class="num">51.5074</span>, <span class="num">-0.1278</span>)
-        <span class="fn">tv_map_set_zoom</span>(map, <span class="num">14.0</span>)
-        <span class="fn">tv_map_set_tile_url</span>(map,
-            <span class="str">"https://tiles.tiletopia.dev/{z}/{x}/{y}.mvt"</span>)
-    }
-
-    <span class="kw">deinit</span> { <span class="fn">tv_map_destroy</span>(map) }
-}</pre>
-            </div>
             <div class="code-block">
                 <div class="code-header">
                     <span>Android — Kotlin</span>
@@ -779,7 +754,7 @@
 
     <span class="kw">fun</span> <span class="fn">destroy</span>() { <span class="fn">tvMapDestroy</span>(map) }
 
-    <span class="cm">// JNI bindings auto-generated from C header</span>
+    <span class="cm">// JNI is hand-written, not generated from a header</span>
     <span class="kw">private external fun</span> <span class="fn">tvMapCreate</span>(...): <span class="ty">Long</span>
     <span class="kw">private external fun</span> <span class="fn">tvMapDestroy</span>(s: <span class="ty">Long</span>)
 }</pre>
@@ -791,7 +766,7 @@
     <section id="status">
         <div class="section-label">Status</div>
         <h2 class="section-title">What Works in v0.1</h2>
-        <p class="section-desc">TerraVista is a map engine core, not yet a drop-in Mapbox or Google Maps replacement. It cannot fetch or draw a tile on its own. Here is the honest split.</p>
+        <p class="section-desc">The core holds map state and math. It does not talk to the network and it does not touch the GPU. The Android library fetches over HTTP and draws on Canvas. There is no iOS SDK.</p>
 
         <table class="comparison-table">
             <thead>
@@ -824,8 +799,8 @@
                 </tr>
                 <tr>
                     <td>Style parsing</td>
-                    <td class="check">&#10003; Works</td>
-                    <td>Mapbox GL style JSON, zoom-interpolated properties</td>
+                    <td class="cross">Unreachable</td>
+                    <td>Snake_case structs, no Mapbox GL JSON parse. No tv_ FFI symbol. Renderer uses a hardcoded style.</td>
                 </tr>
                 <tr>
                     <td>Turn-by-turn navigation</td>
@@ -839,8 +814,8 @@
                 </tr>
                 <tr>
                     <td>HTTP tile fetching</td>
-                    <td class="cross">Roadmap v0.2</td>
-                    <td>No HTTP client in the dependency tree. Your app requests the URLs.</td>
+                    <td class="check">&#10003; Android library</td>
+                    <td>The core has no HTTP client. The Android library fetches over HTTP.</td>
                 </tr>
                 <tr>
                     <td>MVT decoding</td>
@@ -955,9 +930,8 @@ git clone git@github.com:GeoLang/terravista.git
 cargo build
 cargo test
 
-<span class="cm"># Build for iOS</span>
-rustup target add aarch64-apple-ios
-cargo build --target aarch64-apple-ios -p terravista-ffi --release
+<span class="cm"># There is no iOS binding. Cross-compiling the C ABI for aarch64-apple-ios
+# does not produce a Swift module.</span>
 
 <span class="cm"># Build for Android</span>
 rustup target add aarch64-linux-android
