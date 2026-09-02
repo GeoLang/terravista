@@ -8,7 +8,7 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/GeoLang/terravista"
 authors = ["GeoLang <tiletopia@proton.me>"]
-description = "Mobile map SDK — offline tiles, vector rendering, and navigation for iOS/Android"
+description = "Mobile map SDK: offline tiles, vector rendering, and navigation for Android via Kotlin or the C FFI"
 rust-version = "1.85"
 
 [workspace.dependencies]

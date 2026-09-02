@@ -598,7 +598,7 @@
     <section>
         <div class="stats-row">
             <div class="stat">
-                <div class="stat-value">3</div>
+                <div class="stat-value">4</div>
                 <div class="stat-label">Runtime Dependencies</div>
             </div>
             <div class="stat">
@@ -606,7 +606,7 @@
                 <div class="stat-label">Tests</div>
             </div>
             <div class="stat">
-                <div class="stat-value">9</div>
+                <div class="stat-value">11</div>
                 <div class="stat-label">Core Modules</div>
             </div>
             <div class="stat">
@@ -626,12 +626,12 @@
             <div class="feature-card">
                 <div class="feature-icon">📦</div>
                 <h3>Offline Tile Cache</h3>
-                <p>In-memory LRU cache with configurable limits (256 MB default, 50K tiles). Builds XYZ URL templates and reports which tiles a region is missing, so your app can pre-fetch them.</p>
+                <p>In-memory LRU cache with configurable limits (256 MB default, 50K tiles). Builds XYZ URL templates and reports which tiles a region is missing, so your app can pre-fetch them. A region also enumerates its own tiles and estimates its size, and a set of tiles serializes to a TVPK archive for disconnected use.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">👆</div>
                 <h3>Gesture Recognition</h3>
-                <p>Multi-touch state machine handling pan, pinch-zoom, rotate, and tilt. Platform-agnostic — feed it touch events, get camera deltas.</p>
+                <p>Multi-touch state machine with three states: idle, pan, and a two-finger pinch that zooms and rotates together. Pitch is camera state the host sets, not a recognised gesture. Platform-agnostic: feed it touch events, get camera deltas.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon">🎨</div>
@@ -661,7 +661,7 @@
             <div class="feature-card">
                 <div class="feature-icon">🖼️</div>
                 <h3>Render Pipeline</h3>
-                <p>Frame-based command buffer describing what to draw, in screen coordinates. HiDPI/Retina aware. Your platform layer executes the commands. Metal and Vulkan backends are v0.3.</p>
+                <p>Frame-based command buffer describing what to draw, in screen coordinates. HiDPI/Retina aware. Your platform layer executes the commands, as the Android library does on Canvas. No Metal or Vulkan backend is built.</p>
             </div>
         </div>
     </section>
@@ -682,7 +682,7 @@
                 <div class="arch-module"><strong>Tile Cache</strong>LRU + Offline Regions</div>
                 <div class="arch-module"><strong>Offline Store</strong>Vector CRUD + Sync</div>
                 <div class="arch-module"><strong>Renderer</strong>Command Pipeline</div>
-                <div class="arch-module"><strong>Style</strong>Zoom Interpolation</div>
+                <div class="arch-module"><strong>MVT</strong>Vector Tile Decode</div>
                 <div class="arch-module"><strong>Route</strong>Turn-by-Turn Nav</div>
                 <div class="arch-module"><strong>Location</strong>GPS Tracking</div>
             </div>
@@ -693,7 +693,7 @@
     <section id="api">
         <div class="section-label">FFI</div>
         <h2 class="section-title">C API Reference</h2>
-        <p class="section-desc">Flat C functions with <code>tv_</code> prefix. All opaque pointers freed with corresponding <code>_destroy</code>.</p>
+        <p class="section-desc">Flat C functions with <code>tv_</code> prefix. All opaque pointers freed with corresponding <code>_destroy</code>. These are the common ones out of 59, and the <a href="https://github.com/GeoLang/terravista#ffi-api-reference">README</a> lists every group with its structs.</p>
 
         <table class="api-table">
             <thead>
@@ -715,10 +715,24 @@
                 <tr><td>tv_map_set_viewport(state, w, h, dpr)</td><td>Update viewport on resize/rotate</td></tr>
                 <tr><td>tv_map_pan(state, dx, dy)</td><td>Pan by pixel delta</td></tr>
                 <tr><td>tv_map_zoom_by(state, delta)</td><td>Zoom by delta (pinch/scroll)</td></tr>
+                <tr><td>tv_map_touch(state, phase, xs, ys, ids, n)</td><td>Feed raw touches through the recognizer</td></tr>
                 <tr><td>tv_map_set_tile_url(state, url)</td><td>Set tile URL template ({z}/{x}/{y})</td></tr>
+                <tr><td>tv_map_visible_tile_count(state)</td><td>Recompute the frame's tile set</td></tr>
+                <tr><td>tv_map_visible_tile_at(state, i, out)</td><td>Read one tile's screen placement</td></tr>
+                <tr><td>tv_cache_put(state, z, x, y, bytes, len, type)</td><td>Store a fetched tile</td></tr>
                 <tr><td>tv_cache_tile_count(state)</td><td>Get cached tile count</td></tr>
                 <tr><td>tv_cache_size_bytes(state)</td><td>Get cache size in bytes</td></tr>
                 <tr><td>tv_cache_clear(state)</td><td>Clear all cached tiles</td></tr>
+                <tr><td>tv_map_set_vector_tile_url(state, url)</td><td>Set the MVT source's own template</td></tr>
+                <tr><td>tv_vector_cache_put(state, z, x, y, bytes, len)</td><td>Decode and store a vector tile</td></tr>
+                <tr><td>tv_map_vector_frame(state)</td><td>Recompute the frame's vector geometry</td></tr>
+                <tr><td>tv_map_set_layer_style(state, name, fill, stroke, w)</td><td>Override one vector layer's look</td></tr>
+                <tr><td>tv_region_tile_count(minLat, minLon, maxLat, maxLon, minZ, maxZ)</td><td>What a region costs, without enumerating it</td></tr>
+                <tr><td>tv_region_plan(state, ...)</td><td>Enumerate a region's tiles for the host to fetch</td></tr>
+                <tr><td>tv_map_visible_bounds(state, out)</td><td>The box the camera is showing</td></tr>
+                <tr><td>tv_map_set_user_location(state, lat, lon, acc, brg)</td><td>Feed a GPS fix, moving the camera per tracking mode</td></tr>
+                <tr><td>tv_nav_set_route(state, points, n, steps, m)</td><td>Load a route computed elsewhere</td></tr>
+                <tr><td>tv_nav_update(state, lat, lon, out)</td><td>Progress, next step and off-route status for a fix</td></tr>
                 <tr><td>tv_version()</td><td>Get SDK version string (must free)</td></tr>
                 <tr><td>tv_string_free(ptr)</td><td>Free SDK-allocated strings</td></tr>
             </tbody>
@@ -729,7 +743,7 @@
     <section id="integration">
         <div class="section-label">Platforms</div>
         <h2 class="section-title">Platform Integration</h2>
-        <p class="section-desc">Kotlin on Android. There is no Swift module, no <code>.h</code>, no cbindgen, no iOS CI job. The Android library fetches tiles over HTTP and draws on Canvas. The core does neither.</p>
+        <p class="section-desc">Kotlin on Android. There is no Swift module, no <code>.h</code>, no cbindgen, no iOS CI job. The Android library fetches tiles over HTTP and draws on Canvas. The core does neither. An app that wants a map rather than the FFI takes <code>com.github.GeoLang:terravista</code> from JitPack and puts <code>MapView</code> in a layout: raster and vector tiles, a disk cache read before the network, and pinned regions that never evict. The snippet below is the other route, calling the C ABI directly.</p>
 
         <div class="code-section">
             <div class="code-block">
@@ -765,7 +779,7 @@
     <!-- Comparison -->
     <section id="status">
         <div class="section-label">Status</div>
-        <h2 class="section-title">What Works in v0.1</h2>
+        <h2 class="section-title">What Works in v0.4</h2>
         <p class="section-desc">The core holds map state and math. It does not talk to the network and it does not touch the GPU. The Android library fetches over HTTP and draws on Canvas. There is no iOS SDK.</p>
 
         <table class="comparison-table">
@@ -785,7 +799,7 @@
                 <tr>
                     <td>Gesture recognition</td>
                     <td class="check">&#10003; Works</td>
-                    <td>Pan, pinch-zoom, rotate, tilt state machine</td>
+                    <td>Pan, and a two-finger pinch that zooms and rotates, with a 5 degree dead zone before rotation starts</td>
                 </tr>
                 <tr>
                     <td>Tile cache</td>
@@ -796,6 +810,11 @@
                     <td>Offline vector store</td>
                     <td class="check">&#10003; Works</td>
                     <td>In-memory feature CRUD with sync status and GeoJSON export</td>
+                </tr>
+                <tr>
+                    <td>Offline regions and tile packages</td>
+                    <td class="check">&#10003; Works</td>
+                    <td>Tile count, size estimate and enumeration for a bounding box, and a TVPK archive that serializes and reads back. Fetching and writing the tiles is the host's</td>
                 </tr>
                 <tr>
                     <td>Style parsing</td>
@@ -810,7 +829,7 @@
                 <tr>
                     <td>C FFI</td>
                     <td class="check">&#10003; Works</td>
-                    <td>Map lifecycle, camera, gestures, cache</td>
+                    <td>59 functions: map lifecycle, camera, gestures, raster and vector caches, per-layer styling, offline regions, user location, navigation</td>
                 </tr>
                 <tr>
                     <td>HTTP tile fetching</td>
@@ -824,13 +843,13 @@
                 </tr>
                 <tr>
                     <td>Metal rendering (iOS)</td>
-                    <td class="cross">Roadmap v0.3</td>
-                    <td>The renderer emits draw commands, it does not execute them</td>
+                    <td class="cross">Planned</td>
+                    <td>The renderer emits draw commands, it does not execute them, and there is no iOS binding to run them from</td>
                 </tr>
                 <tr>
                     <td>Vulkan rendering (Android)</td>
-                    <td class="cross">Roadmap v0.3</td>
-                    <td>Same, the platform layer owns the GPU</td>
+                    <td class="cross">Planned</td>
+                    <td>The platform layer owns the GPU. The Android library draws on Canvas today</td>
                 </tr>
                 <tr>
                     <td>Route computation</td>

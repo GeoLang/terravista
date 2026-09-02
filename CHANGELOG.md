@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-08-14
+## [Unreleased]
+
+## [0.4.0] - 2026-09-02
 
 - 2026-08-21: `docs/index.html` drops the iOS/Swift SDK, Mapbox GL style
   parse, and auto-generated JNI claims. Android fetches and draws. The
@@ -61,8 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tile count and size from `estimateRegion`, and the map carries floating zoom
   buttons and a compass that turns with the bearing and faces the map north
   when tapped. Stock widgets throughout, no new dependencies.
-
-## [0.4.0] - 2026-08-13
 
 - MVT decoding in the core: layers, features, points, lines, polygons and
   attributes, with ring winding deciding holes so multipolygons keep their

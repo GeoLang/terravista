@@ -1,6 +1,6 @@
 [package]
 name = "terravista-ffi"
-description = "C/Swift/Kotlin FFI bindings for the TerraVista mobile map SDK"
+description = "C FFI bindings for the TerraVista mobile map SDK, called from Kotlin on Android"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

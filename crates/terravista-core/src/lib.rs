@@ -1,13 +1,13 @@
 //! # terravista-core
 //!
 //! Mobile map SDK core — provides offline-first tile caching, vector rendering,
-//! gesture-driven viewport control, and GPS integration for iOS and Android apps.
+//! gesture-driven viewport control, and GPS integration for Android apps.
 //!
 //! ## Architecture
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────┐
-//! │  Platform Layer (Swift / Kotlin via FFI)         │
+//! │  Platform Layer (Kotlin on Android via FFI)      │
 //! ├──────────────────────────────────────────────────┤
 //! │  terravista-ffi  (C ABI / UniFFI bindings)      │
 //! ├──────────────────────────────────────────────────┤

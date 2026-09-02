@@ -1,6 +1,6 @@
 //! Renderer pipeline — abstraction over GPU rendering backend.
 //!
-//! The mobile SDK renders via the platform's GPU (Metal on iOS, Vulkan on Android).
+//! The platform layer executes the draw commands, on Android through Canvas or Vulkan.
 //! This module defines the interface between the tile/vector data and the rendering output.
 
 use std::collections::HashMap;

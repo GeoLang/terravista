@@ -36,12 +36,13 @@ draws on Canvas, including MVT.
 **What the host app must supply**
 
 - **HTTP tile fetching.** TerraVista builds tile URLs, it does not request them. There is no HTTP client in the dependency tree.
-- **GPU rendering.** The renderer emits `RenderCommand` objects. Executing them against Metal or Vulkan is the platform layer's job. No shaders ship here.
+- **Drawing.** The renderer emits `RenderCommand` objects. Executing them is the platform layer's job, on Canvas in the Android library. No shaders ship here.
 - **Routing.** The navigator tracks progress along a route you computed elsewhere, for example with [Itinera](https://github.com/GeoLang/itinera).
 - **GPS.** `LocationProvider` is a trait for the platform to implement.
 
-HTTP fetching is the host's, and the Android library does it for you. The GPU
-rendering backends are targeted for v0.3. See the [Roadmap](#roadmap).
+HTTP fetching is the host's, and the Android library does it for you. No GPU
+rendering backend is built: the Android library draws on Canvas. See the
+[Roadmap](#roadmap).
 
 ---
 
@@ -50,10 +51,10 @@ rendering backends are targeted for v0.3. See the [Roadmap](#roadmap).
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                Platform Layer                                 │
-│        Swift (iOS/macOS)  │  Kotlin (Android)                │
+│        Kotlin (Android), no iOS binding                      │
 ├──────────────────────────────────────────────────────────────┤
 │              terravista-ffi (C ABI)                           │
-│        staticlib (iOS) + cdylib (Android)                    │
+│        cdylib (Android) + staticlib                          │
 ├──────────────────────────────────────────────────────────────┤
 │                    terravista-core                            │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
@@ -73,7 +74,7 @@ rendering backends are targeted for v0.3. See the [Roadmap](#roadmap).
 
 | Crate | Purpose |
 |-------|---------|
-| `terravista-core` | Pure Rust map engine — camera, tiles, styles, navigation |
+| `terravista-core` | Pure Rust map engine: camera, tiles, MVT decoding, navigation |
 | `terravista-ffi` | C ABI bindings for mobile platform consumption |
 
 ---
@@ -97,7 +98,7 @@ rendering backends are targeted for v0.3. See the [Roadmap](#roadmap).
 
 Pitch is camera state that the host can set, not a recognised gesture. Rendering a
 pitched map needs a perspective transform the flat `TilePlacement` cannot express,
-so that waits for the GPU backends in v0.3.
+so that waits for a GPU backend.
 
 ### 📦 Offline Tile Cache
 
@@ -123,10 +124,14 @@ so that waits for the GPU backends in v0.3.
 
 ### 🎨 Style Engine
 
-- Mapbox GL JSON-compatible style definitions
-- Zoom-level interpolated properties (colors, widths, opacity)
-- Layer types: Fill, Line, Symbol, Circle, Raster
-- Source definitions with tile URL templates and zoom ranges
+- Style documents, sources and layers as structs, with zoom-interpolated colors,
+  widths and opacity
+- Layer types: Fill, Line, Circle, Symbol, Background
+- The field names are snake_case and there are no serde renames, so a Mapbox GL
+  JSON style does not deserialize into `MapStyle`
+- Nothing in the crate reads these structs and no `tv_` function reaches them.
+  The renderer uses a fixed look per layer name, and `tv_map_set_layer_style`
+  overrides one layer at a time
 
 ### 🧭 Turn-by-Turn Navigation
 
@@ -149,7 +154,7 @@ so that waits for the GPU backends in v0.3.
 - Frame-based command buffer: Clear, DrawRasterTile, DrawVectorLayer, DrawLocationMarker, DrawRoute
 - Visible tile calculation with screen-space placement
 - Device pixel ratio awareness for Retina/HiDPI displays
-- Describes the frame, it does not draw it. The platform layer executes the commands against Metal (iOS) or Vulkan (Android). Those backends are v0.3.
+- Describes the frame, it does not draw it. The Android library executes the commands on Canvas. No Metal or Vulkan backend is built.
 
 ### 📦 Offline Tile Packages
 
@@ -166,8 +171,9 @@ so that waits for the GPU backends in v0.3.
 ### Prerequisites
 
 - Rust 1.85+ (2024 edition)
-- For iOS: Xcode + `aarch64-apple-ios` target
 - For Android: Android NDK + `aarch64-linux-android` target
+- For the Kotlin library and the sample app: JDK 17 or later, and see
+  [`android/README.md`](android/README.md)
 
 ### Development
 
@@ -185,15 +191,6 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-### iOS (Static Library)
-
-```bash
-rustup target add aarch64-apple-ios
-cargo build --target aarch64-apple-ios -p terravista-ffi --release
-
-# Output: target/aarch64-apple-ios/release/libterravista_ffi.a
-```
-
 ### Android (Shared Library)
 
 ```bash
@@ -204,24 +201,23 @@ cargo build --target aarch64-linux-android -p terravista-ffi --release
 # Output: target/aarch64-linux-android/release/libterravista_ffi.so
 ```
 
-### All Mobile Targets
+### All Android ABIs
 
 ```bash
-# iOS (arm64 + simulator)
-cargo build --target aarch64-apple-ios -p terravista-ffi --release
-cargo build --target aarch64-apple-ios-sim -p terravista-ffi --release
-
-# Android (arm64, armv7, x86_64)
 cargo build --target aarch64-linux-android -p terravista-ffi --release
 cargo build --target armv7-linux-androideabi -p terravista-ffi --release
 cargo build --target x86_64-linux-android -p terravista-ffi --release
 ```
 
+The published Kotlin library ships `arm64-v8a` and `x86_64` only, built by
+`android/tools/build-natives.sh` and committed under
+`android/terravista/src/main/jniLibs`.
+
 ---
 
 ## FFI API Reference
 
-All functions use the `tv_` prefix and follow C naming conventions. Opaque pointers must be freed with their corresponding `_destroy` function.
+All functions use the `tv_` prefix and follow C naming conventions. Opaque pointers must be freed with their corresponding `_destroy` function. There are 59 exported functions.
 
 The FFI covers map state, camera math, and the geometry of a frame. No `tv_` call
 fetches a tile or draws one: the host does both, from the URLs and the placements
@@ -385,9 +381,72 @@ nothing and for one over `TV_REGION_MAX_TILES`, so ask for the count first.
 
 Fetching and storing the tiles is the host's job, as it is for the tile cache.
 
+### Projection
+
+```c
+typedef struct { float x, y; } TvScreenPoint;
+
+// North-up screen position, in the same device pixels as a tile placement.
+bool tv_map_project(const TvMapState* state, double latitude, double longitude,
+                    TvScreenPoint* out);
+double tv_map_metres_per_pixel(const TvMapState* state);
+```
+
+### User Location
+
+```c
+typedef struct {
+    double latitude, longitude;
+    double accuracy_m;   // horizontal radius, negative when unknown
+    double bearing_deg;  // NaN when unknown
+} TvUserLocation;
+
+bool tv_map_set_user_location(TvMapState* state, double latitude, double longitude,
+                              double accuracy_m, double bearing_deg);
+bool tv_map_user_location(const TvMapState* state, TvUserLocation* out);
+
+// TV_TRACKING_NONE, _FOLLOW, _FOLLOW_WITH_HEADING, _FOLLOW_WITH_COURSE.
+bool tv_map_set_tracking_mode(TvMapState* state, int32_t mode);
+int32_t tv_map_get_tracking_mode(const TvMapState* state);
+```
+
+Setting a location moves the camera as the tracking mode asks, so the host feeds
+fixes in and reads the camera back.
+
+### Navigation
+
+```c
+typedef struct { double latitude, longitude; } TvRoutePoint;
+typedef struct {
+    const char* instruction;  // borrowed for the call, may be null
+    uint32_t start_index, end_index;
+} TvRouteStep;
+
+typedef struct {
+    int32_t status;  // TV_NAV_ON_ROUTE, _OFF_ROUTE, _ARRIVED
+    uint32_t step_index, step_count;
+    double distance_to_next_step_m, distance_remaining_m;
+    bool off_route;
+} TvNavProgress;
+
+bool tv_nav_set_route(TvMapState* state, const TvRoutePoint* points, size_t point_count,
+                      const TvRouteStep* steps, size_t step_count);
+bool tv_nav_update(TvMapState* state, double latitude, double longitude,
+                   TvNavProgress* out);
+bool tv_nav_progress(const TvMapState* state, TvNavProgress* out);
+char* tv_nav_instruction(const TvMapState* state);  // caller must free
+void tv_nav_clear(TvMapState* state);
+```
+
+The route comes from elsewhere. `tv_nav_update` takes a fix and returns where on
+that route it falls.
+
 ### Utility
 
 ```c
+double tv_distance_between(double lat1, double lon1, double lat2, double lon2);
+double tv_bearing_between(double lat1, double lon1, double lat2, double lon2);
+
 char* tv_version(void);        // Returns SDK version (caller must free)
 void tv_string_free(char* ptr); // Free SDK-allocated strings
 ```
@@ -396,46 +455,20 @@ void tv_string_free(char* ptr); // Free SDK-allocated strings
 
 ## Platform Integration
 
-These examples wire up camera and gestures, which is everything the SDK does today.
-Fetching the tiles at the configured URL and drawing them is still the app's job.
+### Android library
 
-### Swift (iOS)
+Most Android apps do not touch the FFI. Add `com.github.GeoLang:terravista` from
+JitPack, put `MapView` in a layout, and the library fetches tiles over HTTP,
+draws raster and vector tiles on Canvas, caches every fetched tile on disk, and
+saves pinned regions that survive eviction. See
+[`android/README.md`](android/README.md) for the install snippet, the `MapView`
+members and the offline behaviour.
 
-```swift
-import TerraVista
+### Kotlin over the raw FFI
 
-class MapViewController: UIViewController {
-    private var mapState: OpaquePointer?
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        let bounds = view.bounds
-        let scale = Float(UIScreen.main.scale)
-        mapState = tv_map_create(UInt32(bounds.width), UInt32(bounds.height), scale)
-        tv_map_set_center(mapState, 51.5074, -0.1278)
-        tv_map_set_zoom(mapState, 14.0)
-        tv_map_set_tile_url(mapState, "https://tiles.tiletopia.dev/{z}/{x}/{y}.mvt")
-    }
-
-    @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-        let translation = gesture.translation(in: view)
-        tv_map_pan(mapState, Double(translation.x), Double(translation.y))
-        gesture.setTranslation(.zero, in: view)
-    }
-
-    @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        let delta = log2(Double(gesture.scale))
-        tv_map_zoom_by(mapState, delta)
-        gesture.scale = 1.0
-    }
-
-    deinit {
-        tv_map_destroy(mapState)
-    }
-}
-```
-
-### Kotlin (Android)
+This example wires up camera and gestures by hand. Fetching the tiles at the
+configured URL and drawing them is the app's job. The JNI glue is hand-written,
+there is no generated header.
 
 ```kotlin
 class MapView(context: Context) : View(context) {
@@ -446,7 +479,7 @@ class MapView(context: Context) : View(context) {
         mapState = tvMapCreate(width.toUInt(), height.toUInt(), resources.displayMetrics.density)
         tvMapSetCenter(mapState, 51.5074, -0.1278)
         tvMapSetZoom(mapState, 14.0)
-        tvMapSetTileUrl(mapState, "https://tiles.tiletopia.dev/{z}/{x}/{y}.mvt")
+        tvMapSetTileUrl(mapState, "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -477,17 +510,18 @@ class MapView(context: Context) : View(context) {
 
 ## Roadmap
 
-- [x] **v0.2** — HTTP tile fetching, in the Android library
-- [x] **v0.2** — MVT (Mapbox Vector Tile) decoding
-- [ ] **v0.3** — Metal rendering backend (iOS)
-- [ ] **v0.3** — Vulkan rendering backend (Android)
-- [ ] **v0.4** — Annotation layers (markers, polylines, polygons)
-- [ ] **v0.4** — Clustering for point features
-- [ ] **v0.5** — 3D terrain mesh from DEM tiles
-- [ ] **v0.5** — Globe view (non-Mercator) for low zoom levels
-- [ ] **v0.6** — Swift Package Manager distribution
-- [ ] **v0.6** — Maven/Gradle distribution for Android
-- [ ] **v1.0** — Stable C ABI with semantic versioning guarantees
+- [x] **v0.2**: HTTP tile fetching, in the Android library
+- [x] **v0.2**: Gradle distribution for Android, published through JitPack
+- [x] **v0.3**: turn-by-turn navigation and user location in the Android library
+- [x] **v0.4**: MVT (Mapbox Vector Tile) decoding
+- [ ] Planned: Vulkan rendering backend (Android)
+- [ ] Planned: Metal rendering backend, which needs an iOS binding first
+- [ ] Planned: annotation layers (markers, polylines, polygons)
+- [ ] Planned: clustering for point features
+- [ ] Planned: 3D terrain mesh from DEM tiles
+- [ ] Planned: globe view (non-Mercator) for low zoom levels
+- [ ] Planned: Swift Package Manager distribution
+- [ ] Planned: stable C ABI with semantic versioning guarantees
 
 ---
 

@@ -2,8 +2,8 @@
 //!
 //! C-compatible FFI bindings for the TerraVista mobile map SDK.
 //!
-//! Provides a flat C API that Swift (iOS) and Kotlin (Android) can call
-//! through their respective FFI mechanisms.
+//! Provides a flat C API that Kotlin on Android calls through JNI, and that any
+//! other language with a C FFI can call.
 //!
 //! ## Memory Management
 //!

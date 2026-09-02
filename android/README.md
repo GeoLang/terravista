@@ -18,7 +18,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.GeoLang:terravista:0.2.0")
+    implementation("com.github.GeoLang:terravista:0.4.0")
 }
 ```
 
@@ -185,7 +185,7 @@ blank space, so `maxZoom` is a quality knob, not a correctness one.
 cd android
 ./gradlew :terravista:assembleRelease      # AAR
 ./gradlew :sample:installDebug             # sample on a connected device
-./gradlew :terravista:publishToMavenLocal  # com.github.GeoLang:terravista:0.2.0
+./gradlew :terravista:publishToMavenLocal  # com.github.GeoLang:terravista:0.4.0
 ```
 
 Needs JDK 17 or later. Gradle 8.9 does not run on JDK 25, so if that is your default
