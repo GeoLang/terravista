@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 2026-09-16: `terravista_core::style` no longer documents itself as parsing
+  Mapbox GL styles. The structs are serde derives nothing in the renderer or
+  FFI reads.
 - 2026-09-16: the Kotlin snippet on `docs/index.html` set a tile URL on
   `tiles.tiletopia.dev`, a host that does not exist, and pointed the raster
   template at `.mvt`. It uses the OpenStreetMap tile URL the README uses.

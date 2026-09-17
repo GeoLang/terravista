@@ -1,7 +1,3 @@
-//! Style engine — runtime style evaluation for vector tiles.
-//!
-//! Parses and evaluates Mapbox GL-compatible styles to determine how features render.
-
 use serde::{Deserialize, Serialize};
 
 /// A complete map style document.
