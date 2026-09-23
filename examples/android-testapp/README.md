@@ -1,7 +1,7 @@
 # TerraVista Android test app
 
-Minimal app proving the SDK drives a real map on real hardware. All map math comes from
-terravista over the C ABI: touch events go into the SDK gesture recognizer, the visible tile
+A minimal Java app that drives the C ABI on a device, built without Gradle. All map math
+comes from terravista: touch events go into the SDK gesture recognizer, the visible tile
 set and screen placements come out of it, and tile bytes are stored in and read back from the
 SDK tile cache. The app only does HTTP, PNG decode, and `Canvas.drawBitmap`.
 
@@ -34,7 +34,7 @@ Environment, override by exporting before `build.sh`:
 - `ANDROID_NDK_HOME` defaults to `~/android-ndk-r27c`
 - `cargo-ndk` and the `aarch64-linux-android` rust target must be installed
 
-## Things that bit us
+## Gotchas
 
 - **javac must target 17.** `d8` from build-tools 35 rejects newer class files. `build.sh`
   passes `--release 17`.

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GeoLang/terravista/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/terravista/actions)
 
-**Mobile map SDK core for the GeoLang ecosystem**: camera and viewport math, gesture recognition, tile caching, offline feature storage, and on-device turn-by-turn navigation, exposed to Android over a flat C FFI.
+**Mobile map SDK for Android**: a Rust core for camera math, gestures, tile caching, MVT decoding and turn-by-turn navigation, behind a flat C FFI and a Kotlin `MapView`.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
@@ -13,13 +13,11 @@
 
 ## Overview
 
-TerraVista is a mobile mapping core written in Rust, consumed from Kotlin (Android) via a flat C FFI. It holds map state and does the map math. It does not talk to the network and it does not touch the GPU.
+The Rust core holds map state and does the map math. It has no HTTP client and no GPU code. The Kotlin library in [`android/`](android/README.md) fetches tiles over HTTP and draws raster and MVT tiles on Canvas. Android is the only platform: there is no iOS or macOS binding.
 
 ### Status
 
-This is v0.4. TerraVista is not yet a drop-in replacement for Mapbox or Google Maps: the
-core cannot fetch or draw a tile on its own. The Android library fetches over HTTP and
-draws on Canvas, including MVT.
+Version 0.4.0.
 
 **What works today**
 
@@ -27,22 +25,21 @@ draws on Canvas, including MVT.
 - Gesture recognition: pan, and a two-finger pinch that zooms and rotates together
 - Tile cache: in-memory LRU keyed by tile coordinate, with XYZ URL template building
 - MVT decoding: layers, features, geometry and attributes, straight to screen-space draw commands
-- Offline vector store: in-memory feature CRUD with sync status tracking
+- Offline regions: tile count, size estimate and tile list for a bounding box
 - Turn-by-turn navigation over a pre-computed route
-- Location model: coordinates, Haversine distance, bearing, tracking modes
+- User location with camera tracking modes
 - Render command buffer: describes what to draw, in screen coordinates
-- C FFI covering map lifecycle, camera, gestures, cache, vector tiles, offline regions, user location and navigation
+- C FFI covering map lifecycle, camera, gestures, raster and vector caches, per-layer styling, offline regions, projection, user location and navigation
+- Kotlin `MapView` on JitPack, with a disk tile cache and saved offline regions
+
+The offline vector store and TVPK tile packages are Rust API only. No `tv_` function reaches them.
 
 **What the host app must supply**
 
-- **HTTP tile fetching.** TerraVista builds tile URLs, it does not request them. There is no HTTP client in the dependency tree.
-- **Drawing.** The renderer emits `RenderCommand` objects. Executing them is the platform layer's job, on Canvas in the Android library. No shaders ship here.
-- **Routing.** The navigator tracks progress along a route you computed elsewhere, for example with [Itinera](https://github.com/GeoLang/itinera).
-- **GPS.** `LocationProvider` is a trait for the platform to implement.
-
-HTTP fetching is the host's, and the Android library does it for you. No GPU
-rendering backend is built: the Android library draws on Canvas. See the
-[Roadmap](#roadmap).
+- **HTTP tile fetching.** The core builds tile URLs, it does not request them. The Android library does the requests.
+- **Drawing.** The core emits draw commands and screen placements. The Android library draws them on Canvas.
+- **Routing.** The navigator tracks progress along a route computed elsewhere, for example by [Itinera](https://github.com/GeoLang/itinera).
+- **GPS.** The host feeds every location fix in. `LocationProvider` is a trait for the platform to implement.
 
 ---
 
@@ -63,8 +60,8 @@ rendering backend is built: the Android library draws on Canvas. See the
 │  │          │  │  (LRU)   │  │  (Sync)  │  │  (GPS)     │  │
 │  └──────────┘  └──────────┘  └──────────┘  └────────────┘  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │ Gesture  │  │ Renderer │  │  Style   │  │   Route    │  │
-│  │ Recogn.  │  │ Pipeline │  │  Engine  │  │  Engine    │  │
+│  │ Gesture  │  │ Renderer │  │   MVT    │  │   Route    │  │
+│  │Recognizer│  │ Pipeline │  │  Decode  │  │  Engine    │  │
 │  │          │  │          │  │          │  │  (Nav)     │  │
 │  └──────────┘  └──────────┘  └──────────┘  └────────────┘  │
 └──────────────────────────────────────────────────────────────┘
@@ -74,40 +71,40 @@ rendering backend is built: the Android library draws on Canvas. See the
 
 | Crate | Purpose |
 |-------|---------|
-| `terravista-core` | Pure Rust map engine: camera, tiles, MVT decoding, navigation |
-| `terravista-ffi` | C ABI bindings for mobile platform consumption |
+| `terravista-core` | Rust map engine: camera, tiles, MVT decoding, navigation |
+| `terravista-ffi` | C ABI over `terravista-core`, built as a cdylib and a staticlib |
+| `android/` | Kotlin library and sample app, built with Gradle, see [`android/README.md`](android/README.md) |
 
 ---
 
 ## Features
 
-### 🗺️ Camera & Viewport
+### Camera and viewport
 
-- Continuous zoom levels 0–22 with smooth interpolation
-- Bearing (rotation) and pitch (tilt) for 3D perspective
+- Continuous zoom from 0 to 22
+- Bearing (rotation) and pitch (tilt, clamped to 0 to 60 degrees)
 - Web Mercator projection with tile coordinate calculation
-- Viewport-aware visible bounds and tile range computation
+- Visible bounds and tile range for the viewport
+- Tile zoom is `round(zoom + log2(device pixel ratio))`, so one 256 px tile covers 256 device pixels
 
-### 👆 Gesture Recognition
+### Gesture recognition
 
-- Multi-touch state machine: Idle → Pan → PinchZoom
-- A two-finger gesture zooms and rotates at once, with a 5° dead zone before rotation starts
+- Multi-touch state machine: Idle, Pan, PinchZoom
+- A two-finger gesture zooms and rotates at once, with a 5 degree dead zone before rotation starts
 - Zoom is anchored, so the point between the fingers stays put
-- Camera delta output (pan pixels, zoom delta, rotation degrees)
-- Platform-agnostic — works with any touch input system
+- Takes plain touch points in device pixels, from any platform
 
-Pitch is camera state that the host can set, not a recognised gesture. Rendering a
-pitched map needs a perspective transform the flat `TilePlacement` cannot express,
-so that waits for a GPU backend.
+No gesture sets pitch, and nothing draws a pitched map: that needs a perspective
+transform `TilePlacement` cannot express.
 
-### 📦 Offline Tile Cache
+### Tile cache
 
-- In-memory LRU eviction with configurable max size (default 256 MB) and tile count (50,000)
-- `missing_tiles` computes what a region still needs, so the host can pre-fetch it
-- URL template system (`{z}/{x}/{y}` substitution), building only, the host does the request
-- Tile metadata tracking (format, size, timestamps)
+- In-memory LRU with a size cap (default 256 MB) and a tile count cap (default 50,000)
+- `missing_tiles` lists what a region still needs, so the host can pre-fetch it
+- XYZ URL templates (`{z}/{x}/{y}` substitution). The host makes the request
+- Per-tile content type, size and fetch time
 
-### 🧬 Vector Tiles
+### Vector tiles
 
 - MVT spec v2 decoding by [`jung-mvt`](https://github.com/GeoLang/jung): layers, features, points, lines, polygons and attributes
 - Ring winding decides holes, so a multipolygon keeps its parts
@@ -115,54 +112,40 @@ so that waits for a GPU backend.
 - A fixed default look per layer name, no style spec, no labels and no fonts
 - Vector tiles cache and draw alongside raster ones, from their own URL template
 
-### 🔄 Offline Vector Store
+### Offline vector store (Rust API only)
 
-- On-device feature CRUD with GeoJSON geometry
-- Sync status tracking: `Synced`, `PendingCreate`, `PendingUpdate`, `PendingDelete`, `Conflict`
-- Bounding-box spatial queries
-- GeoJSON export for sync with remote servers
+- In-memory feature CRUD with GeoJSON geometry
+- Sync status per feature: `Synced`, `PendingCreate`, `PendingUpdate`, `PendingDelete`, `Conflict`
+- Bounding-box queries
+- `export_geojson` writes a FeatureCollection. Sending it to a server is the host's job
 
-### 🎨 Style Engine
+### Turn-by-turn navigation
 
-- Style documents, sources and layers as structs, with zoom-interpolated colors,
-  widths and opacity
-- Layer types: Fill, Line, Circle, Symbol, Background
-- The field names are snake_case and there are no serde renames, so a Mapbox GL
-  JSON style does not deserialize into `MapStyle`
-- Nothing in the crate reads these structs and no `tv_` function reaches them.
-  The renderer uses a fixed look per layer name, and `tv_map_set_layer_style`
-  overrides one layer at a time
+- Tracks progress along a route computed elsewhere, with no network calls
+- Step instructions, distance to the next step and total distance remaining
+- Off-route when a fix is more than 50 m from the route. The threshold is fixed
+- Arrived when on the last step and within 20 m of the end
+- The core `Maneuver` enum has Depart, Turn, Slight and Sharp left and right, UTurn, Straight, Merge, RampLeft, RampRight, Roundabout and Arrive. The C ABI carries instruction text only
 
-### 🧭 Turn-by-Turn Navigation
+### Location
 
-- On-device route tracking (no cloud dependency)
-- Step-by-step maneuver instructions
-- Off-route detection (configurable threshold, default 50m)
-- Distance-to-next-step and total distance remaining
-- Arrival detection
-- Maneuver types: Depart, Turn L/R, Slight L/R, Sharp L/R, U-Turn, Merge, Ramp, Roundabout, Arrive
-
-### 📍 Location Service
-
-- GPS coordinate model with altitude, accuracy, speed, course
-- Haversine distance and bearing calculations
+- Location fix model with altitude, accuracy, speed and heading
+- Haversine distance and initial bearing
 - Tracking modes: None, Follow, FollowWithHeading, FollowWithCourse
-- Abstract `LocationProvider` trait for platform implementation
+- `LocationProvider` trait for the platform to implement
 
-### 🖼️ Render Pipeline
+### Render pipeline
 
-- Frame-based command buffer: Clear, DrawRasterTile, DrawVectorLayer, DrawLocationMarker, DrawRoute
-- Visible tile calculation with screen-space placement
-- Device pixel ratio awareness for Retina/HiDPI displays
-- Describes the frame, it does not draw it. The Android library executes the commands on Canvas. No Metal or Vulkan backend is built.
+- Frame command buffer: Clear, DrawRasterTile, DrawVectorLayer, DrawLocationMarker, DrawRoute
+- Visible tiles with their screen placement, in device pixels
+- Describes the frame, it does not draw it. The Android library draws on Canvas. No GPU backend is built
 
-### 📦 Offline Tile Packages
+### Offline tile packages (Rust API only)
 
-- Custom TVPK binary archive format for fully disconnected use, not MBTiles or SQLite
-- `PackageDefinition` pairs an `OfflineRegion` with a tile format
-- Tile enumeration and size estimation come from the region, the same ones the tile cache pre-fetches from
-- Serialize and deserialize a package, with a magic-byte header and MBTiles-style metadata keys
-- Held in memory, and populated by the host since there is no downloader here
+- TVPK, a custom binary archive with a magic-byte header and MBTiles-style metadata keys. It is not MBTiles or SQLite
+- `PackageDefinition` pairs an `OfflineRegion` with a tile format (png, jpg, webp, pbf)
+- Tile enumeration and size estimation come from `OfflineRegion`, the same type the `tv_region_*` calls use
+- Held in memory and filled by the host. There is no downloader in the core
 
 ---
 
@@ -181,11 +164,11 @@ so that waits for a GPU backend.
 # Build all crates
 cargo build
 
-# Run tests (130 tests)
-cargo test
+# Run tests
+cargo test --all
 
-# Lint
-cargo clippy --all-targets -- -D warnings
+# Lint, as CI runs it
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Format
 cargo fmt --all
@@ -217,11 +200,13 @@ The published Kotlin library ships `arm64-v8a` and `x86_64` only, built by
 
 ## FFI API Reference
 
-All functions use the `tv_` prefix and follow C naming conventions. Opaque pointers must be freed with their corresponding `_destroy` function. There are 59 exported functions.
+All functions use the `tv_` prefix. Free a map with `tv_map_destroy` and every
+returned `char*` with `tv_string_free`. There is no generated C header: the
+declarations below are hand-written, and the JNI glue declares its externs the
+same way.
 
-The FFI covers map state, camera math, and the geometry of a frame. No `tv_` call
-fetches a tile or draws one: the host does both, from the URLs and the placements
-the SDK gives it.
+No `tv_` call fetches a tile or draws one. The host does both, from the URLs and
+the placements the SDK gives it.
 
 ### Map Lifecycle
 
@@ -237,9 +222,9 @@ void tv_map_destroy(TvMapState* state);
 
 ```c
 void tv_map_set_center(TvMapState* state, double latitude, double longitude);
-void tv_map_set_zoom(TvMapState* state, double zoom);       // 0.0–22.0
-void tv_map_set_bearing(TvMapState* state, double bearing); // 0–360°
-void tv_map_set_pitch(TvMapState* state, double pitch);     // 0–60°
+void tv_map_set_zoom(TvMapState* state, double zoom);       // clamped to 0 to 22
+void tv_map_set_bearing(TvMapState* state, double bearing); // degrees, taken mod 360
+void tv_map_set_pitch(TvMapState* state, double pitch);     // clamped to 0 to 60
 void tv_map_set_viewport(TvMapState* state, uint32_t width, uint32_t height, float dpr);
 
 double tv_map_get_zoom(const TvMapState* state);
@@ -263,8 +248,9 @@ int32_t tv_map_touch(TvMapState* state, int32_t phase, const double* xs,
                      const double* ys, const uint64_t* ids, size_t count);
 ```
 
-`phase` is one of `TV_TOUCH_BEGIN`, `_MOVE`, `_END`, `_CANCEL`. The return value is
-`TV_GESTURE_NONE`, `_PAN`, `_ZOOM`, `_PINCH`, `_ROTATE` or `_PITCH`.
+`phase` is one of `TV_TOUCH_BEGIN`, `_MOVE`, `_END`, `_CANCEL`. The return value is a
+`TV_GESTURE_*` constant. The recognizer only produces `_NONE`, `_PAN` and `_PINCH`,
+and `_ZOOM`, `_ROTATE` and `_PITCH` are defined but never returned.
 
 ### Visible Tiles
 
@@ -458,64 +444,39 @@ void tv_string_free(char* ptr); // Free SDK-allocated strings
 ### Android library
 
 Most Android apps do not touch the FFI. Add `com.github.GeoLang:terravista` from
-JitPack, put `MapView` in a layout, and the library fetches tiles over HTTP,
-draws raster and vector tiles on Canvas, caches every fetched tile on disk, and
-saves pinned regions that survive eviction. See
-[`android/README.md`](android/README.md) for the install snippet, the `MapView`
-members and the offline behaviour.
+JitPack and put `MapView` in a layout. The library fetches tiles over HTTP, draws
+raster and vector tiles on Canvas, caches every fetched tile on disk, saves
+offline regions that are never evicted, draws the user location, and runs
+navigation. See [`android/README.md`](android/README.md) for the install snippet,
+the `MapView` members and the offline behaviour.
 
-### Kotlin over the raw FFI
+### Calling the C ABI from JNI
 
-This example wires up camera and gestures by hand. Fetching the tiles at the
-configured URL and drawing them is the app's job. The JNI glue is hand-written,
-there is no generated header.
+Kotlin cannot call a `tv_` function directly, so a small C library sits between
+them. The Android library's glue is `android/terravista/src/main/jni/terravista_jni.c`,
+bound in Kotlin by `TerraVistaNative.kt`, and it loads two libraries:
 
 ```kotlin
-class MapView(context: Context) : View(context) {
-    private var mapState: Long = 0
-
-    init {
-        System.loadLibrary("terravista_ffi")
-        mapState = tvMapCreate(width.toUInt(), height.toUInt(), resources.displayMetrics.density)
-        tvMapSetCenter(mapState, 51.5074, -0.1278)
-        tvMapSetZoom(mapState, 14.0)
-        tvMapSetTileUrl(mapState, "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        // Forward to gesture detector
-        when (event.action) {
-            MotionEvent.ACTION_MOVE -> {
-                tvMapPan(mapState, event.x.toDouble(), event.y.toDouble())
-            }
-        }
-        return true
-    }
-
-    fun destroy() {
-        tvMapDestroy(mapState)
-    }
-
-    // JNI bindings
-    private external fun tvMapCreate(w: UInt, h: UInt, dpr: Float): Long
-    private external fun tvMapDestroy(state: Long)
-    private external fun tvMapSetCenter(state: Long, lat: Double, lon: Double)
-    private external fun tvMapSetZoom(state: Long, zoom: Double)
-    private external fun tvMapSetTileUrl(state: Long, url: String)
-    private external fun tvMapPan(state: Long, dx: Double, dy: Double)
-}
+System.loadLibrary("terravista_ffi")
+System.loadLibrary("terravista_jni")
 ```
+
+[`examples/android-testapp`](examples/android-testapp) does the same from Java,
+built without Gradle.
 
 ---
 
 ## Roadmap
 
+Unchecked items are not built.
+
 - [x] **v0.2**: HTTP tile fetching, in the Android library
 - [x] **v0.2**: Gradle distribution for Android, published through JitPack
 - [x] **v0.3**: turn-by-turn navigation and user location in the Android library
 - [x] **v0.4**: MVT (Mapbox Vector Tile) decoding
+- [ ] Planned: a style spec the renderer reads. `terravista_core::style` holds style structs, but nothing reads them, no `tv_` function reaches them, and a Mapbox GL JSON style does not deserialize into them
 - [ ] Planned: Vulkan rendering backend (Android)
-- [ ] Planned: Metal rendering backend, which needs an iOS binding first
+- [ ] Planned: iOS binding, then a Metal rendering backend
 - [ ] Planned: annotation layers (markers, polylines, polygons)
 - [ ] Planned: clustering for point features
 - [ ] Planned: 3D terrain mesh from DEM tiles

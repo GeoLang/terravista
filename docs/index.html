@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TerraVista &mdash; Mobile Map SDK for GeoLang</title>
-    <meta name="description" content="Open-source mobile map SDK core: camera and viewport math, gesture recognition, tile caching, and on-device turn-by-turn navigation for Android. There is no iOS or macOS binding. Tile fetching and GPU rendering are the host app's job.">
+    <title>TerraVista: Mobile Map SDK for Android</title>
+    <meta name="description" content="Mobile map SDK for Android: a Rust core for camera math, gestures, tile caching, MVT decoding and turn-by-turn navigation, behind a flat C FFI and a Kotlin MapView. There is no iOS or macOS binding.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -557,7 +557,7 @@
 <body>
     <nav>
         <div class="container">
-            <a href="#" class="logo">🌍 Terra<span>Vista</span></a>
+            <a href="#" class="logo">Terra<span>Vista</span></a>
             <ul class="links">
                 <li><a href="#features">Features</a></li>
                 <li><a href="#architecture">Architecture</a></li>
@@ -577,12 +577,12 @@
             <span class="highlight">Open Source</span>
         </h1>
         <p class="subtitle">
-            Camera and viewport math, gesture recognition, tile caching, and turn-by-turn navigation, from a single Rust library behind a flat C FFI. It holds the map state and does the map math. Fetching tiles and drawing them stays in your app.
+            Camera and viewport math, gesture recognition, tile caching, MVT decoding and turn-by-turn navigation, in a Rust library behind a flat C FFI. The Kotlin <code>MapView</code> on top of it fetches tiles over HTTP and draws them on Canvas. Android only.
         </p>
         <div class="badges">
-            <span class="badge green">✓ Offline-First</span>
-            <span class="badge blue">📐 Map Math Core</span>
-            <span class="badge amber">🦀 Pure Rust</span>
+            <span class="badge green">Android</span>
+            <span class="badge blue">C FFI</span>
+            <span class="badge amber">Rust core</span>
         </div>
         <div class="cta-group">
             <a href="https://github.com/GeoLang/terravista" class="btn btn-primary">
@@ -602,8 +602,8 @@
                 <div class="stat-label">Runtime Dependencies</div>
             </div>
             <div class="stat">
-                <div class="stat-value">130</div>
-                <div class="stat-label">Tests</div>
+                <div class="stat-value">2</div>
+                <div class="stat-label">Android ABIs</div>
             </div>
             <div class="stat">
                 <div class="stat-value">11</div>
@@ -619,49 +619,41 @@
     <!-- Features -->
     <section id="features">
         <div class="section-label">Capabilities</div>
-        <h2 class="section-title">The Map Engine Core</h2>
-        <p class="section-desc">The state and the math a mobile map needs, with no cloud dependencies, no API keys, and no vendor lock-in. Networking and drawing are deliberately left to the platform layer.</p>
+        <h2 class="section-title">The Rust Core</h2>
+        <p class="section-desc">The map state and the math a mobile map needs. The core makes no network calls and needs no API key. The Android library does the fetching and the drawing.</p>
 
         <div class="features-grid">
             <div class="feature-card">
-                <div class="feature-icon">📦</div>
                 <h3>Offline Tile Cache</h3>
-                <p>In-memory LRU cache with configurable limits (256 MB default, 50K tiles). Builds XYZ URL templates and reports which tiles a region is missing, so your app can pre-fetch them. A region also enumerates its own tiles and estimates its size, and a set of tiles serializes to a TVPK archive for disconnected use.</p>
+                <p>In-memory LRU cache with a size cap and a tile count cap (256 MB and 50,000 tiles by default). Builds XYZ URLs and reports which tiles a region is missing, so your app can pre-fetch them. A region counts, estimates and lists its tiles. In the Rust API only, a set of tiles serializes to a TVPK archive.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">👆</div>
                 <h3>Gesture Recognition</h3>
-                <p>Multi-touch state machine with three states: idle, pan, and a two-finger pinch that zooms and rotates together. Pitch is camera state the host sets, not a recognised gesture. Platform-agnostic: feed it touch events, get camera deltas.</p>
+                <p>Multi-touch state machine with three states: idle, pan, and a two-finger pinch that zooms and rotates together. No gesture sets pitch. Feed it touch points from any platform and it moves the camera.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">🎨</div>
-                <h3>Style Engine</h3>
-                <p>Structs exist. They do not parse Mapbox GL JSON (snake_case, no <code>type</code> / <code>minzoom</code> / paint stop renames). No FFI symbol reaches this module. The renderer uses a hardcoded style keyed by layer name.</p>
+                <h3>Vector Tiles</h3>
+                <p>MVT decoding by <code>jung-mvt</code>, straight to screen-space points, lines and polygons with holes. Each layer name gets a fixed look, and one call overrides a layer's fill, stroke and width. There is no style spec and no labels.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">🧭</div>
                 <h3>Turn-by-Turn Navigation</h3>
-                <p>On-device route tracking with step instructions, off-route detection (50m threshold), and arrival notification. No cloud required.</p>
+                <p>Tracks progress along a route computed elsewhere: step instructions, distance to the next step and to the end, off-route past 50 m, and arrival.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">🔄</div>
                 <h3>Offline Vector Editing</h3>
-                <p>Local feature store with create/update/delete and sync status tracking. BBox spatial queries and GeoJSON export.</p>
+                <p>In-memory feature store with create, update and delete, and a sync status per feature. Bounding-box queries and GeoJSON export. Rust API only, no FFI function reaches it.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">🗺️</div>
                 <h3>Camera Model</h3>
-                <p>Continuous zoom (0–22), bearing, pitch. Web Mercator projection with viewport-aware tile range calculation.</p>
+                <p>Continuous zoom from 0 to 22, bearing and pitch. Web Mercator projection, visible bounds and tile range for the viewport.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">📍</div>
                 <h3>Location Service</h3>
-                <p>GPS abstraction with tracking modes (Follow, Heading, Course). Haversine distance and bearing calculations built in.</p>
+                <p>The host feeds location fixes in, and the camera follows them in Follow, Heading or Course mode. Haversine distance and bearing.</p>
             </div>
             <div class="feature-card">
-                <div class="feature-icon">🖼️</div>
                 <h3>Render Pipeline</h3>
-                <p>Frame-based command buffer describing what to draw, in screen coordinates. HiDPI/Retina aware. Your platform layer executes the commands, as the Android library does on Canvas. No Metal or Vulkan backend is built.</p>
+                <p>A frame command buffer describing what to draw, in device pixels. The platform layer draws it, as the Android library does on Canvas. No GPU backend is built.</p>
             </div>
         </div>
     </section>
@@ -670,12 +662,12 @@
     <section id="architecture">
         <div class="section-label">Design</div>
         <h2 class="section-title">Layered Architecture</h2>
-        <p class="section-desc">Clean separation between platform code, FFI boundary, and pure Rust core engine.</p>
+        <p class="section-desc">Kotlin calls a hand-written JNI library, which calls the C ABI, which wraps the Rust core.</p>
 
         <div class="arch-diagram">
-            <div class="layer layer-platform">Kotlin (Android). There is no iOS or macOS binding.</div>
-            <div class="layer layer-ffi">terravista-ffi — C ABI (staticlib + cdylib)</div>
-            <div class="layer layer-core">terravista-core — Pure Rust Engine</div>
+            <div class="layer layer-platform">Kotlin MapView (Android). There is no iOS or macOS binding.</div>
+            <div class="layer layer-ffi">terravista-ffi: C ABI (staticlib + cdylib)</div>
+            <div class="layer layer-core">terravista-core: Rust map engine</div>
             <div class="arch-modules">
                 <div class="arch-module"><strong>Camera</strong>Viewport & Projection</div>
                 <div class="arch-module"><strong>Gesture</strong>Touch State Machine</div>
@@ -693,7 +685,7 @@
     <section id="api">
         <div class="section-label">FFI</div>
         <h2 class="section-title">C API Reference</h2>
-        <p class="section-desc">Flat C functions with <code>tv_</code> prefix. All opaque pointers freed with corresponding <code>_destroy</code>. These are the common ones out of 59, and the <a href="https://github.com/GeoLang/terravista#ffi-api-reference">README</a> lists every group with its structs.</p>
+        <p class="section-desc">Flat C functions with the <code>tv_</code> prefix. Free a map with <code>tv_map_destroy</code> and every returned string with <code>tv_string_free</code>. These are the common ones. The <a href="https://github.com/GeoLang/terravista#ffi-api-reference">README</a> lists every function with its structs.</p>
 
         <table class="api-table">
             <thead>
@@ -706,12 +698,12 @@
                 <tr><td>tv_map_create(w, h, dpr)</td><td>Create map state with viewport dimensions</td></tr>
                 <tr><td>tv_map_destroy(state)</td><td>Free map state</td></tr>
                 <tr><td>tv_map_set_center(state, lat, lon)</td><td>Set map center coordinate</td></tr>
-                <tr><td>tv_map_set_zoom(state, zoom)</td><td>Set zoom level (0.0–22.0)</td></tr>
+                <tr><td>tv_map_set_zoom(state, zoom)</td><td>Set zoom level, clamped to 0 to 22</td></tr>
                 <tr><td>tv_map_get_zoom(state)</td><td>Get current zoom level</td></tr>
                 <tr><td>tv_map_get_center_lat(state)</td><td>Get center latitude</td></tr>
                 <tr><td>tv_map_get_center_lon(state)</td><td>Get center longitude</td></tr>
-                <tr><td>tv_map_set_bearing(state, deg)</td><td>Set rotation (0–360°)</td></tr>
-                <tr><td>tv_map_set_pitch(state, deg)</td><td>Set tilt angle (0–60°)</td></tr>
+                <tr><td>tv_map_set_bearing(state, deg)</td><td>Set rotation in degrees</td></tr>
+                <tr><td>tv_map_set_pitch(state, deg)</td><td>Set tilt, clamped to 0 to 60 degrees</td></tr>
                 <tr><td>tv_map_set_viewport(state, w, h, dpr)</td><td>Update viewport on resize/rotate</td></tr>
                 <tr><td>tv_map_pan(state, dx, dy)</td><td>Pan by pixel delta</td></tr>
                 <tr><td>tv_map_zoom_by(state, delta)</td><td>Zoom by delta (pinch/scroll)</td></tr>
@@ -743,35 +735,26 @@
     <section id="integration">
         <div class="section-label">Platforms</div>
         <h2 class="section-title">Platform Integration</h2>
-        <p class="section-desc">Kotlin on Android. There is no Swift module, no <code>.h</code>, no cbindgen, no iOS CI job. The Android library fetches tiles over HTTP and draws on Canvas. The core does neither. An app that wants a map rather than the FFI takes <code>com.github.GeoLang:terravista</code> from JitPack and puts <code>MapView</code> in a layout: raster and vector tiles, a disk cache read before the network, and pinned regions that never evict. The snippet below is the other route, calling the C ABI directly.</p>
+        <p class="section-desc">Android only. There is no Swift module and no generated C header. An app takes <code>com.github.GeoLang:terravista</code> from JitPack and puts <code>MapView</code> in a layout. It gets raster and vector tiles, a disk cache read before the network, offline regions that are never evicted, a user location dot and route progress. The <a href="https://github.com/GeoLang/terravista/tree/master/android">Android README</a> covers the full API.</p>
 
         <div class="code-section">
             <div class="code-block">
                 <div class="code-header">
-                    <span>Android — Kotlin</span>
+                    <span>Android: Kotlin</span>
                     <span class="code-lang">Kotlin</span>
                 </div>
-                <pre><span class="kw">class</span> <span class="ty">MapView</span>(ctx: <span class="ty">Context</span>) : <span class="ty">View</span>(ctx) {
-    <span class="kw">private var</span> map: <span class="ty">Long</span> = <span class="num">0</span>
+                <pre><span class="cm">// app/build.gradle.kts, with https://jitpack.io in the repositories</span>
+<span class="fn">implementation</span>(<span class="str">"com.github.GeoLang:terravista:0.4.0"</span>)
 
-    <span class="kw">init</span> {
-        <span class="ty">System</span>.<span class="fn">loadLibrary</span>(<span class="str">"terravista_ffi"</span>)
-        map = <span class="fn">tvMapCreate</span>(
-            width.toUInt(),
-            height.toUInt(),
-            resources.displayMetrics.density)
-        <span class="fn">tvMapSetCenter</span>(map, <span class="num">51.5074</span>, <span class="num">-0.1278</span>)
-        <span class="fn">tvMapSetZoom</span>(map, <span class="num">14.0</span>)
-        <span class="fn">tvMapSetTileUrl</span>(map,
-            <span class="str">"https://tile.openstreetmap.org/{z}/{x}/{y}.png"</span>)
-    }
+<span class="cm">// an Activity whose layout holds a dev.geolang.terravista.MapView</span>
+<span class="kw">val</span> map = <span class="fn">findViewById</span>&lt;<span class="ty">MapView</span>&gt;(R.id.map)
+map.<span class="fn">setCenter</span>(<span class="num">51.5074</span>, <span class="num">-0.1278</span>)
+map.zoom = <span class="num">14.0</span>
+map.vectorTileUrlTemplate =
+    <span class="str">"https://tiles.example.com/{z}/{x}/{y}.mvt"</span>
 
-    <span class="kw">fun</span> <span class="fn">destroy</span>() { <span class="fn">tvMapDestroy</span>(map) }
-
-    <span class="cm">// JNI is hand-written, not generated from a header</span>
-    <span class="kw">private external fun</span> <span class="fn">tvMapCreate</span>(...): <span class="ty">Long</span>
-    <span class="kw">private external fun</span> <span class="fn">tvMapDestroy</span>(s: <span class="ty">Long</span>)
-}</pre>
+<span class="cm">// in onDestroy, frees the native map</span>
+map.<span class="fn">destroy</span>()</pre>
             </div>
         </div>
     </section>
@@ -809,17 +792,17 @@
                 <tr>
                     <td>Offline vector store</td>
                     <td class="check">&#10003; Works</td>
-                    <td>In-memory feature CRUD with sync status and GeoJSON export</td>
+                    <td>In-memory feature CRUD with sync status and GeoJSON export. Rust API only</td>
                 </tr>
                 <tr>
                     <td>Offline regions and tile packages</td>
                     <td class="check">&#10003; Works</td>
-                    <td>Tile count, size estimate and enumeration for a bounding box, and a TVPK archive that serializes and reads back. Fetching and writing the tiles is the host's</td>
+                    <td>Tile count, size estimate and enumeration for a bounding box. The Android library downloads and stores regions. The TVPK archive is Rust API only</td>
                 </tr>
                 <tr>
-                    <td>Style parsing</td>
-                    <td class="cross">Unreachable</td>
-                    <td>Snake_case structs, no Mapbox GL JSON parse. No tv_ FFI symbol. Renderer uses a hardcoded style.</td>
+                    <td>Style spec</td>
+                    <td class="cross">Planned</td>
+                    <td>Not built. Style structs exist in the core, but nothing reads them and no <code>tv_</code> function reaches them. Each layer name gets a fixed look, overridable per layer</td>
                 </tr>
                 <tr>
                     <td>Turn-by-turn navigation</td>
@@ -829,12 +812,12 @@
                 <tr>
                     <td>C FFI</td>
                     <td class="check">&#10003; Works</td>
-                    <td>59 functions: map lifecycle, camera, gestures, raster and vector caches, per-layer styling, offline regions, user location, navigation</td>
+                    <td>Map lifecycle, camera, gestures, raster and vector caches, per-layer styling, offline regions, projection, user location, navigation</td>
                 </tr>
                 <tr>
                     <td>HTTP tile fetching</td>
                     <td class="check">&#10003; Android library</td>
-                    <td>The core has no HTTP client. The Android library fetches over HTTP.</td>
+                    <td>The core has no HTTP client. The Android library fetches over HTTP and caches tiles on disk</td>
                 </tr>
                 <tr>
                     <td>MVT decoding</td>
@@ -842,14 +825,14 @@
                     <td>Layers, features, geometry and attributes, placed as screen-space draw commands</td>
                 </tr>
                 <tr>
-                    <td>Metal rendering (iOS)</td>
+                    <td>iOS binding and Metal rendering</td>
                     <td class="cross">Planned</td>
-                    <td>The renderer emits draw commands, it does not execute them, and there is no iOS binding to run them from</td>
+                    <td>Not built. There is no iOS or macOS code</td>
                 </tr>
                 <tr>
                     <td>Vulkan rendering (Android)</td>
                     <td class="cross">Planned</td>
-                    <td>The platform layer owns the GPU. The Android library draws on Canvas today</td>
+                    <td>Not built. The Android library draws on Canvas</td>
                 </tr>
                 <tr>
                     <td>Route computation</td>
@@ -864,7 +847,7 @@
     <section>
         <div class="section-label">Ecosystem</div>
         <h2 class="section-title">Part of GeoLang</h2>
-        <p class="section-desc">TerraVista integrates with the full GeoLang geospatial platform.</p>
+        <p class="section-desc">TerraVista decodes MVT with Jung's <code>jung-mvt</code> crate and follows routes from a router such as Itinera.</p>
 
         <div class="eco-grid">
             <a href="https://github.com/GeoLang/tiletopia" class="eco-card">
@@ -933,8 +916,8 @@
     <!-- Getting Started -->
     <section>
         <div class="section-label">Quick Start</div>
-        <h2 class="section-title">Get Started in Minutes</h2>
-        <p class="section-desc">Clone, build, and integrate into your mobile app.</p>
+        <h2 class="section-title">Build from Source</h2>
+        <p class="section-desc">Build and test the Rust workspace, then cross-compile the C ABI for Android. The Gradle build is in the Android README.</p>
 
         <div class="code-block" style="max-width: 700px;">
             <div class="code-header">
@@ -942,17 +925,14 @@
                 <span class="code-lang">bash</span>
             </div>
             <pre><span class="cm"># Clone</span>
-git clone git@github.com:GeoLang/terravista.git
+git clone https://github.com/GeoLang/terravista.git
 <span class="kw">cd</span> terravista
 
-<span class="cm"># Build & test</span>
+<span class="cm"># Build and test</span>
 cargo build
-cargo test
+cargo test --all
 
-<span class="cm"># There is no iOS binding. Cross-compiling the C ABI for aarch64-apple-ios
-# does not produce a Swift module.</span>
-
-<span class="cm"># Build for Android</span>
+<span class="cm"># Build the C ABI for Android, needs ANDROID_NDK_HOME and a linker config</span>
 rustup target add aarch64-linux-android
 cargo build --target aarch64-linux-android -p terravista-ffi --release</pre>
         </div>
@@ -961,7 +941,7 @@ cargo build --target aarch64-linux-android -p terravista-ffi --release</pre>
     <!-- Footer -->
     <footer>
         <p>
-            TerraVista is part of <a href="https://github.com/GeoLang">GeoLang</a> — open-source geospatial infrastructure.
+            TerraVista is part of <a href="https://github.com/GeoLang">GeoLang</a>, an open-source geospatial platform.
         </p>
         <p style="margin-top: 0.5rem; color: var(--text-tertiary);">
             &copy; 2026 Grok Image Compression Inc. Licensed under AGPL-3.0-or-later.
