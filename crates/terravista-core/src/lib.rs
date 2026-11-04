@@ -9,7 +9,7 @@
 //! ┌──────────────────────────────────────────────────┐
 //! │  Platform Layer (Kotlin on Android via FFI)      │
 //! ├──────────────────────────────────────────────────┤
-//! │  terravista-ffi  (C ABI / UniFFI bindings)      │
+//! │  terravista-ffi  (C ABI, called through JNI)     │
 //! ├──────────────────────────────────────────────────┤
 //! │  terravista-core                                 │
 //! │  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐ │
