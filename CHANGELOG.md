@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 2026-11-04: CI calls the reusable `rust-ci.yml` in `GeoLang/.github`. The
+  `android` job stays in `ci.yml`, and the Rust jobs move from
+  `actions/checkout` v4 and `codecov/codecov-action` v4 to v7.
 - 2026-09-16: `terravista_core::style` no longer documents itself as parsing
   Mapbox GL styles. The structs are serde derives nothing in the renderer or
   FFI reads.
